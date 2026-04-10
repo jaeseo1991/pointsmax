@@ -460,6 +460,69 @@ input, select { font-family: var(--font); }
 .spend-summary .total { font-size: 20px; font-weight: 700; color: var(--purple); }
 
 /* ===== STEP 2: CARD SELECTOR ===== */
+/* Bank group */
+.bank-group { margin-bottom: 28px; }
+
+.bank-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.bank-group-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gray-700);
+}
+
+.bank-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.bank-select-all {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-400);
+  background: none;
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.bank-select-all:hover { border-color: var(--color-primary); color: var(--color-primary); }
+.bank-select-all.active { background: var(--color-primary-light); border-color: var(--color-primary); color: var(--color-primary); }
+.bank-select-all.partial { color: var(--color-primary); }
+
+.card-color-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  border-radius: 10px 10px 0 0;
+}
+
+.card-fee-row { margin: 4px 0 6px; }
+.card-fee-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 2px 8px;
+  border-radius: 100px;
+}
+.card-fee-badge.free { background: var(--color-success-light); color: var(--color-success); }
+.card-fee-badge.paid { background: #fef3c7; color: #92400e; }
+
 .card-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -586,12 +649,26 @@ input, select { font-family: var(--font); }
 
 .credits-card-header {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
+  justify-content: space-between;
   gap: 10px;
   margin-bottom: 12px;
 }
 
-.credits-card-name { font-size: 15px; font-weight: 700; color: var(--gray-900); }
+.credits-card-name { font-size: 15px; font-weight: 700; color: var(--gray-900); margin-bottom: 4px; }
+
+.credits-fee-calc {
+  font-size: 13px;
+  color: var(--gray-500);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 2px;
+}
+.credits-fee-base { font-weight: 600; color: var(--gray-600); }
+.credits-fee-minus { color: var(--color-success); font-weight: 500; }
+.credits-fee-equals { color: var(--gray-400); }
+.credits-fee-effective { font-weight: 700; color: var(--color-primary); }
 
 .credits-fee-badge {
   font-size: 12px;
@@ -601,6 +678,22 @@ input, select { font-family: var(--font); }
   color: var(--gray-500);
   font-weight: 500;
 }
+
+.credits-select-all {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-400);
+  background: none;
+  border: 1px solid var(--gray-200);
+  border-radius: 6px;
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+.credits-select-all:hover { border-color: var(--color-success); color: var(--color-success); }
+.credits-select-all.active { background: var(--color-success-light); border-color: var(--color-success); color: var(--color-success); }
 
 .credits-list { display: flex; flex-direction: column; gap: 8px; }
 
@@ -910,6 +1003,36 @@ input, select { font-family: var(--font); }
   color: var(--gray-400);
   margin-bottom: 12px;
 }
+
+/* Chart plain-English callout */
+.chart-callout {
+  background: var(--gray-50);
+  border: 1px solid var(--gray-200);
+  border-radius: 10px;
+  padding: 12px 16px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  color: var(--gray-600);
+  line-height: 1.6;
+}
+.chart-callout strong { color: var(--gray-800); }
+.chart-callout-bonus {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin-bottom: 6px;
+  font-size: 13px;
+  color: #4338ca;
+}
+.chart-callout-bonus strong { color: #4338ca; }
+.chart-callout-bonus-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: #6366f1;
+  flex-shrink: 0;
+}
+.chart-callout-lines { color: var(--gray-600); }
 
 .tier-chart-footer {
   margin-top: 10px;
@@ -1746,3 +1869,399 @@ input, select { font-family: var(--font); }
 .plaid-txn-meta { font-size: 12px; color: var(--gray-400); margin-top: 2px; }
 .plaid-txn-plaid-cat { color: var(--gray-300); }
 .plaid-txn-amount { font-size: 14px; font-weight: 700; color: var(--gray-800); flex-shrink: 0; }
+
+/* ===== SPEND PRESETS ===== */
+.spend-presets {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 20px;
+}
+
+.spend-preset-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 14px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 20px;
+  background: white;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--gray-600);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.spend-preset-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+  background: var(--color-primary-light);
+}
+.preset-icon { font-size: 15px; }
+.preset-label { white-space: nowrap; }
+
+/* ===== WALLET CARD PILLS — OWNED vs NEW ===== */
+.wallet-card-pill.owned {
+  background: var(--color-success-light);
+  color: var(--color-success);
+  border-color: #a7f3d0;
+}
+.wallet-card-pill.new-card {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+  border-color: #c7d2fe;
+}
+
+/* ===== BEST CARD PER CATEGORY ===== */
+.best-card-section {
+  margin-bottom: 32px;
+  background: white;
+  border: 1px solid var(--gray-200);
+  border-radius: 12px;
+  padding: 20px 24px;
+}
+.best-card-title {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--gray-800);
+  margin: 0 0 4px;
+}
+.best-card-subtitle {
+  font-size: 13px;
+  color: var(--gray-500);
+  margin: 0 0 16px;
+}
+.best-card-table {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.best-card-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  background: var(--gray-50);
+  border-radius: 8px;
+  gap: 12px;
+}
+.best-card-cat {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 160px;
+}
+.best-card-icon { font-size: 16px; }
+.best-card-cat-name { font-size: 13px; font-weight: 600; color: var(--gray-700); }
+.best-card-spend { font-size: 12px; color: var(--gray-400); margin-left: 4px; }
+.best-card-result {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  justify-content: flex-end;
+}
+.best-card-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-700);
+  padding-left: 8px;
+  white-space: nowrap;
+}
+.best-card-rate {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-success);
+  background: var(--color-success-light);
+  padding: 2px 8px;
+  border-radius: 100px;
+  white-space: nowrap;
+}
+.best-card-annual {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gray-700);
+  min-width: 60px;
+  text-align: right;
+}
+
+
+.bonus-fee-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 12px;
+}
+.bonus-fee-label { color: var(--gray-400); }
+.bonus-fee-value { color: var(--gray-600); font-weight: 500; }
+.bonus-fee-value.free { color: var(--color-success); }
+.bonus-fee-value.strikethrough { text-decoration: line-through; color: var(--gray-400); }
+.bonus-fee-value.effective { color: var(--color-success); font-weight: 600; }
+
+.bonus-spend-requirement {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  margin-bottom: 6px;
+  flex-wrap: wrap;
+}
+.bonus-spend-req-label {
+  font-size: 12px;
+  color: var(--gray-400);
+}
+.bonus-spend-req-value {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gray-700);
+}
+.bonus-spend-req-rate {
+  font-size: 12px;
+  color: var(--gray-400);
+}
+
+/* ─── Net Advantage Chart ─────────────────────────────────────────────────── */
+.net-chart-wrap {
+  padding: 4px 0 8px;
+}
+.net-chart-summary {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  text-align: center;
+  margin: 0 0 12px;
+  line-height: 1.5;
+}
+.net-chart-summary strong {
+  color: var(--color-text-primary);
+}
+.net-chart-legend {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  margin: 6px 0 2px;
+}
+.net-chart-legend-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  color: var(--gray-500);
+}
+.net-chart-swatch {
+  width: 12px;
+  height: 10px;
+  border-radius: 2px;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.net-chart-dash {
+  width: 20px;
+  border-top: 1.5px dashed #94a3b8;
+  display: inline-block;
+  flex-shrink: 0;
+}
+.net-chart-pills {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin: 10px 0 4px;
+}
+
+/* ─── Recommendation Banner ───────────────────────────────────────────────── */
+.rec-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 16px 20px;
+  border-radius: var(--radius-lg);
+  margin-bottom: 24px;
+  border: 1px solid transparent;
+}
+.rec-banner.rec-free {
+  background: var(--color-success-light);
+  border-color: rgba(29, 158, 117, 0.25);
+}
+.rec-banner.rec-paid {
+  background: var(--color-primary-light);
+  border-color: rgba(60, 52, 137, 0.25);
+}
+.rec-icon {
+  font-size: 20px;
+  line-height: 1;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.rec-free .rec-icon { color: var(--color-success); }
+.rec-paid .rec-icon { color: var(--color-primary); }
+.rec-content { flex: 1; min-width: 0; }
+.rec-headline {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin-bottom: 6px;
+  line-height: 1.3;
+}
+.rec-detail {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+.rec-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  margin-bottom: 8px;
+}
+.rec-stat {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+}
+.rec-stat strong { color: var(--color-primary); }
+.rec-why {
+  font-size: 13px;
+  color: var(--color-text-secondary);
+  margin-bottom: 8px;
+  line-height: 1.5;
+}
+.rec-cards-needed {
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: rgba(60, 52, 137, 0.06);
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: 20px;
+  margin-top: 4px;
+}
+.rec-cards-needed.rec-owned {
+  background: rgba(29, 158, 117, 0.08);
+  color: var(--color-success);
+}
+
+/* ─── Tier Comparison ─────────────────────────────────────────────────────── */
+.tier-comparison {
+  background: white;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 20px;
+  margin-bottom: 32px;
+}
+.comparison-heading {
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  margin: 0 0 16px;
+}
+.comparison-selectors {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 20px;
+}
+.comparison-select {
+  flex: 1;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  background: white;
+  color: var(--color-text-primary);
+  cursor: pointer;
+}
+.comparison-vs {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--gray-400);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  flex-shrink: 0;
+}
+.comparison-table {
+  border: 1px solid var(--gray-100);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+}
+.comparison-row {
+  display: grid;
+  grid-template-columns: 160px 1fr 1fr;
+  border-bottom: 1px solid var(--gray-100);
+}
+.comparison-row:last-child { border-bottom: none; }
+.comparison-header {
+  background: var(--gray-50);
+}
+.comparison-metric {
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-500);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--gray-100);
+}
+.comparison-note {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--gray-400);
+}
+.comparison-col-header {
+  padding: 10px 14px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--color-text-primary);
+  text-align: center;
+  border-right: 1px solid var(--gray-100);
+}
+.comparison-col-header:last-child { border-right: none; }
+.comparison-col-header.winner {
+  color: var(--color-primary);
+  background: var(--color-primary-light);
+}
+.comparison-cell {
+  padding: 10px 14px;
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--color-text-primary);
+  text-align: center;
+  border-right: 1px solid var(--gray-100);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+.comparison-cell:last-child { border-right: none; }
+.cell-winner {
+  background: var(--color-primary-light);
+  color: var(--color-primary);
+}
+.cell-loser {
+  color: var(--gray-400);
+}
+.cell-check {
+  font-size: 12px;
+  color: var(--color-primary);
+}
+.comp-pill {
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--gray-100);
+  color: var(--gray-600);
+  padding: 2px 8px;
+  border-radius: 20px;
+  white-space: nowrap;
+}
+.comparison-verdict {
+  margin-top: 14px;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--color-primary-light);
+  font-size: 13px;
+  color: var(--color-primary);
+}
+.comparison-verdict.tied {
+  background: var(--gray-50);
+  color: var(--gray-500);
+}
