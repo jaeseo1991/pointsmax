@@ -4,16 +4,16 @@ import cors from 'cors';
 import { PlaidApi, PlaidEnvironments, Configuration, Products, CountryCode } from 'plaid';
 
 const app = express();
-app.use(cors({ origin: 'http://localhost:5173' }));
+app.use(cors({ origin: /^http:\/\/localhost:\d+$/ }));
 app.use(express.json());
 
 // ── Plaid client ──────────────────────────────────────────────────────────────
 const plaidConfig = new Configuration({
-  basePath: PlaidEnvironments[process.env.PLAID_ENV || 'sandbox'],
+  basePath: PlaidEnvironments[process.env.VITE_PLAID_ENV || 'sandbox'],
   baseOptions: {
     headers: {
-      'PLAID-CLIENT-ID': process.env.PLAID_CLIENT_ID,
-      'PLAID-SECRET': process.env.PLAID_SECRET,
+      'PLAID-CLIENT-ID': process.env.VITE_PLAID_CLIENT_ID,
+      'PLAID-SECRET': process.env.VITE_PLAID_SECRET,
     },
   },
 });
