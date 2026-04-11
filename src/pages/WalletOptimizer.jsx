@@ -28,7 +28,7 @@ const TOP_RATES = {
   bilt: ['dining: 3x', 'travel: 2x', 'rent: 1x (no fee)'],
 };
 const REDEEM_ICONS = { cashout:'💵', portal:'🖥️', transfer:'🤝', expert:'🧠' };
-const STEPS = ['Spending', 'Cards', 'Eligibility', 'Credits', 'Redemption'];
+const STEPS = ['Spending', 'Cards', 'Preferences'];
 
 // ─── Step 1: Spend ────────────────────────────────────────────────────────────
 const SPEND_PRESETS = [
@@ -104,27 +104,38 @@ function StepSpend({ local, setLocal, onNext }) {
   );
 }
 
-// ─── Step 2: Cards ────────────────────────────────────────────────────────────
+// ─── Step 2: Cards + Inline Eligibility ──────────────────────────────────────
 const BANK_GROUPS = [
-  { issuer: 'Chase',      label: 'Chase',             color: '#1a6bab' },
-  { issuer: 'Amex',       label: 'American Express',  color: '#c8992a' },
-  { issuer: 'Citi',       label: 'Citi',              color: '#c41230' },
-  { issuer: 'CapitalOne', label: 'Capital One',        color: '#d03027' },
-  { issuer: 'Discover',   label: 'Discover',           color: '#ff6500' },
-  { issuer: 'WellsFargo', label: 'Wells Fargo',        color: '#cf0a2c' },
-  { issuer: 'USBank',     label: 'U.S. Bank',          color: '#0051a5' },
-  { issuer: 'Robinhood',  label: 'Robinhood',          color: '#00c805' },
-  { issuer: 'Apple',      label: 'Apple',              color: '#1d1d1f' },
-  { issuer: 'Bilt',       label: 'Bilt',               color: '#1a1a2e' },
+  { issuer: 'Chase',      label: 'Chase',            color: '#1a6bab' },
+  { issuer: 'Amex',       label: 'American Express', color: '#c8992a' },
+  { issuer: 'Citi',       label: 'Citi',             color: '#c41230' },
+  { issuer: 'CapitalOne', label: 'Capital One',       color: '#d03027' },
+  { issuer: 'Discover',   label: 'Discover',          color: '#ff6500' },
+  { issuer: 'WellsFargo', label: 'Wells Fargo',       color: '#cf0a2c' },
+  { issuer: 'USBank',     label: 'U.S. Bank',         color: '#0051a5' },
+  { issuer: 'Robinhood',  label: 'Robinhood',         color: '#00c805' },
+  { issuer: 'Apple',      label: 'Apple',             color: '#1d1d1f' },
+  { issuer: 'Bilt',       label: 'Bilt',              color: '#1a1a2e' },
 ];
+const AMEX_CARDS = CARDS.filter(c => c.issuer === 'Amex');
 
 function StepCards({ local, setLocal, onNext, onBack }) {
   const owned = local.ownedCards;
+  const [showElig, setShowElig] = useState(false);
+
   const toggle = id => setLocal(l => ({
     ...l,
     ownedCards: l.ownedCards.includes(id) ? l.ownedCards.filter(c => c !== id) : [...l.ownedCards, id],
   }));
+  const setField = (key, val) => setLocal(l => ({ ...l, [key]: val }));
+  const toggleHeld = id => setLocal(l => ({
+    ...l,
+    heldCards: l.heldCards.includes(id) ? l.heldCards.filter(c => c !== id) : [...l.heldCards, id],
+  }));
+
   const totalFee = CARDS.filter(c => owned.includes(c.id)).reduce((s, c) => s + c.annualFee, 0);
+  const over524 = local.cards24months >= 5;
+  const amexFull = local.amexCount >= 5;
 
   return (
     <>
@@ -142,6 +153,12 @@ function StepCards({ local, setLocal, onNext, onBack }) {
               <div className="bank-group-title">
                 <span className="bank-dot" style={{ background: bank.color }} />
                 {bank.label}
+                {bank.issuer === 'Chase' && over524 && (
+                  <span className="eligibility-warn-badge">⚠ Over 5/24</span>
+                )}
+                {bank.issuer === 'Amex' && amexFull && (
+                  <span className="eligibility-warn-badge">⚠ Amex limit</span>
+                )}
               </div>
               <button
                 className={`bank-select-all ${allSelected ? 'active' : someSelected ? 'partial' : ''}`}
@@ -157,25 +174,33 @@ function StepCards({ local, setLocal, onNext, onBack }) {
               </button>
             </div>
             <div className="card-grid">
-              {bankCards.map(card => (
-                <button key={card.id} className={`card-option ${owned.includes(card.id) ? 'selected' : ''}`} onClick={() => toggle(card.id)}>
-                  <div className="card-check" />
-                  <div className="card-color-bar" style={{ background: card.color }} />
-                  <div className="card-info">
-                    <div className="card-name">{card.name}</div>
-                    <div className="card-fee-row">
-                      <span className={`card-fee-badge ${card.annualFee === 0 ? 'free' : 'paid'}`}>
-                        {card.annualFee === 0 ? 'No fee' : `$${card.annualFee}/yr`}
-                      </span>
+              {bankCards.map(card => {
+                const restricted = (card.issuer === 'Chase' && over524) || (card.issuer === 'Amex' && amexFull);
+                return (
+                  <button key={card.id}
+                    className={`card-option ${owned.includes(card.id) ? 'selected' : ''} ${restricted ? 'restricted' : ''}`}
+                    onClick={() => toggle(card.id)}>
+                    <div className="card-check" />
+                    <div className="card-color-bar" style={{ background: card.color }} />
+                    <div className="card-info">
+                      <div className="card-name">{card.name}</div>
+                      <div className="card-fee-row">
+                        <span className={`card-fee-badge ${card.annualFee === 0 ? 'free' : 'paid'}`}>
+                          {card.annualFee === 0 ? 'No fee' : `$${card.annualFee}/yr`}
+                        </span>
+                        {restricted && !owned.includes(card.id) && (
+                          <span className="card-ineligible-tag">Not eligible</span>
+                        )}
+                      </div>
+                      <div className="card-rates">
+                        {(TOP_RATES[card.id] || []).map(r => (
+                          <span key={r} className={`rate-chip ${/[4-9]x|10x/.test(r) ? 'highlight' : ''}`}>{r}</span>
+                        ))}
+                      </div>
                     </div>
-                    <div className="card-rates">
-                      {(TOP_RATES[card.id] || []).map(r => (
-                        <span key={r} className={`rate-chip ${/[4-9]x|10x/.test(r) ? 'highlight' : ''}`}>{r}</span>
-                      ))}
-                    </div>
-                  </div>
-                </button>
-              ))}
+                  </button>
+                );
+              })}
             </div>
           </div>
         );
@@ -187,186 +212,90 @@ function StepCards({ local, setLocal, onNext, onBack }) {
           <span className="total" style={{ fontSize: 16 }}>${totalFee}/yr in fees</span>
         </div>
       )}
-      <div className="wizard-nav">
-        <button className="btn btn-secondary" onClick={onBack}>← Back</button>
-        <button className="btn btn-primary" onClick={onNext}>Next: Eligibility →</button>
-      </div>
-    </>
-  );
-}
 
-// ─── Step 3: Eligibility ──────────────────────────────────────────────────────
-const AMEX_CARDS = CARDS.filter(c => c.issuer === 'Amex');
-function StepEligibility({ local, setLocal, onNext, onBack }) {
-  const { cards24months, amexCount, heldCards } = local;
-  const set = (key, val) => setLocal(l => ({ ...l, [key]: val }));
-  const toggleHeld = id => setLocal(l => ({
-    ...l,
-    heldCards: l.heldCards.includes(id) ? l.heldCards.filter(c => c !== id) : [...l.heldCards, id],
-  }));
-  return (
-    <>
-      <h2 className="step-heading">Eligibility Check</h2>
-      <p className="step-subheading">Help us filter out cards you're not eligible for.</p>
-      <div className="eligibility-grid">
-        <div className="field-group">
-          <label>Cards opened in last 24 months<span className="hint"> (Chase 5/24 rule)</span></label>
-          <select value={cards24months} onChange={e => set('cards24months', parseInt(e.target.value))}>
-            {[0,1,2,3,4,5,6].map(v => <option key={v} value={v}>{v === 6 ? '6+' : v}</option>)}
-          </select>
-          {cards24months >= 5 && <span style={{ fontSize: 12, color: 'var(--red)', marginTop: 4 }}>Over 5/24 — Chase cards unavailable</span>}
-        </div>
-        <div className="field-group">
-          <label>Open Amex cards currently<span className="hint"> (5-card max)</span></label>
-          <select value={amexCount} onChange={e => set('amexCount', parseInt(e.target.value))}>
-            {[0,1,2,3,4,5].map(v => <option key={v} value={v}>{v}</option>)}
-          </select>
-          {amexCount >= 5 && <span style={{ fontSize: 12, color: 'var(--red)', marginTop: 4 }}>At limit — no new Amex cards</span>}
-        </div>
-      </div>
-      <div className="chips-section">
-        <div className="chips-label">
-          Amex cards you've held before
-          <span style={{ fontSize: 12, color: 'var(--gray-400)', fontWeight: 400, marginLeft: 8 }}>(affects welcome bonus — once per lifetime)</span>
-        </div>
-        <div className="chips-grid">
-          {AMEX_CARDS.map(card => (
-            <button key={card.id} className={`chip ${heldCards.includes(card.id) ? 'selected' : ''}`} onClick={() => toggleHeld(card.id)}>
-              {card.name.replace('Amex ', '')}
-            </button>
-          ))}
-        </div>
-      </div>
-      {cards24months >= 2 && (
-        <div className="eligibility-note">
-          💡 With {cards24months} cards opened in the last 24 months, Chase cards may require more scrutiny (5/24 rule applies at 5+).
-        </div>
-      )}
-      <div className="wizard-nav">
-        <button className="btn btn-secondary" onClick={onBack}>← Back</button>
-        <button className="btn btn-primary" onClick={onNext}>Next: Credits →</button>
-      </div>
-    </>
-  );
-}
-
-// ─── Step 4: Credits ──────────────────────────────────────────────────────────
-function StepCredits({ local, setLocal, onNext, onBack }) {
-  const { selectedCredits, ownedCards } = local;
-  const relevantCards = CARDS.filter(c => ownedCards.includes(c.id) && STATEMENT_CREDITS[c.id]);
-
-  const toggle = (cardId, creditId) => {
-    const current = selectedCredits[cardId] || [];
-    const next = current.includes(creditId) ? current.filter(x => x !== creditId) : [...current, creditId];
-    setLocal(l => ({ ...l, selectedCredits: { ...l.selectedCredits, [cardId]: next } }));
-  };
-
-  const selectAll = (cardId) => {
-    const allIds = (STATEMENT_CREDITS[cardId] || []).map(c => c.id);
-    setLocal(l => ({ ...l, selectedCredits: { ...l.selectedCredits, [cardId]: allIds } }));
-  };
-
-  const deselectAll = (cardId) => {
-    setLocal(l => ({ ...l, selectedCredits: { ...l.selectedCredits, [cardId]: [] } }));
-  };
-
-  const isSelected = (cardId, creditId) => (selectedCredits[cardId] || []).includes(creditId);
-
-  const getEffective = (card) => {
-    const credits = STATEMENT_CREDITS[card.id] || [];
-    const selected = selectedCredits[card.id] || [];
-    const creditSum = credits.filter(c => selected.includes(c.id)).reduce((s, c) => s + c.value, 0);
-    return Math.max(0, card.annualFee - creditSum);
-  };
-
-  const totalCreditValue = Object.entries(selectedCredits).reduce((sum, [cardId, ids]) => {
-    const credits = STATEMENT_CREDITS[cardId] || [];
-    return sum + credits.filter(c => ids.includes(c.id)).reduce((s, c) => s + c.value, 0);
-  }, 0);
-
-  const totalBaseFee = relevantCards.reduce((s, c) => s + c.annualFee, 0);
-
-  return (
-    <>
-      <h2 className="step-heading">Statement Credits</h2>
-      <p className="step-subheading">Check the credits you actually use — they reduce your effective annual fee.</p>
-      {relevantCards.length === 0 ? (
-        <div className="eligibility-note" style={{ marginBottom: 24 }}>None of your selected cards have statement credits. Click Next to continue.</div>
-      ) : (
-        relevantCards.map(card => {
-          const credits = STATEMENT_CREDITS[card.id] || [];
-          const selected = selectedCredits[card.id] || [];
-          const allSelected = credits.every(c => selected.includes(c.id));
-          const effectiveFee = getEffective(card);
-          const creditSum = card.annualFee - effectiveFee;
-
-          return (
-            <div className="credits-section" key={card.id}>
-              <div className="credits-card-header">
-                <div>
-                  <span className="credits-card-name">{card.name}</span>
-                  <div className="credits-fee-calc">
-                    <span className="credits-fee-base">${card.annualFee}</span>
-                    {creditSum > 0 && (
-                      <>
-                        <span className="credits-fee-minus"> − ${creditSum} credits</span>
-                        <span className="credits-fee-equals"> = </span>
-                        <span className="credits-fee-effective">${effectiveFee} effective fee</span>
-                      </>
-                    )}
-                  </div>
-                </div>
-                <button
-                  className={`credits-select-all ${allSelected ? 'active' : ''}`}
-                  onClick={() => allSelected ? deselectAll(card.id) : selectAll(card.id)}
-                >
-                  {allSelected ? 'Deselect all' : 'Select all'}
-                </button>
+      {/* Inline eligibility — collapsible */}
+      <div className="eligibility-inline">
+        <button className="eligibility-toggle" onClick={() => setShowElig(s => !s)}>
+          <span>Eligibility &amp; restrictions</span>
+          <span className="eligibility-toggle-hint">Affects which cards you can apply for</span>
+          <span className="eligibility-toggle-arrow">{showElig ? '▲' : '▼'}</span>
+        </button>
+        {showElig && (
+          <div className="eligibility-inline-body">
+            <div className="eligibility-inline-row">
+              <div className="field-group">
+                <label>New cards opened in last 24 months <span className="hint">(Chase 5/24)</span></label>
+                <select value={local.cards24months} onChange={e => setField('cards24months', parseInt(e.target.value))}>
+                  {[0,1,2,3,4,5,6].map(v => <option key={v} value={v}>{v === 6 ? '6+' : v}</option>)}
+                </select>
+                {over524 && <p className="field-warn">Over 5/24 — new Chase cards are flagged above</p>}
               </div>
-              <div className="credits-list">
-                {credits.map(credit => (
-                  <button key={credit.id} className={`credit-item ${isSelected(card.id, credit.id) ? 'selected' : ''}`} onClick={() => toggle(card.id, credit.id)}>
-                    <div className="credit-checkbox" />
-                    <div className="credit-details">
-                      <div className="credit-name">{credit.label}</div>
-                      <div className="credit-desc">{credit.description}</div>
-                    </div>
-                    <div className="credit-value">−${credit.value}</div>
+              <div className="field-group">
+                <label>Open Amex cards currently <span className="hint">(5-card max)</span></label>
+                <select value={local.amexCount} onChange={e => setField('amexCount', parseInt(e.target.value))}>
+                  {[0,1,2,3,4,5].map(v => <option key={v} value={v}>{v}</option>)}
+                </select>
+                {amexFull && <p className="field-warn">At limit — new Amex cards flagged above</p>}
+              </div>
+            </div>
+            <div className="field-group" style={{ marginTop: 12 }}>
+              <label>Amex cards you've held before <span className="hint">(once-per-lifetime bonus rule)</span></label>
+              <div className="chips-grid" style={{ marginTop: 8 }}>
+                {AMEX_CARDS.map(card => (
+                  <button key={card.id}
+                    className={`chip ${local.heldCards.includes(card.id) ? 'selected' : ''}`}
+                    onClick={() => toggleHeld(card.id)}>
+                    {card.name.replace('Amex ', '')}
                   </button>
                 ))}
               </div>
             </div>
-          );
-        })
-      )}
-      {totalCreditValue > 0 && (
-        <div className="credits-total">
-          <span className="label">
-            ${totalBaseFee} total fees − ${totalCreditValue} credits
-          </span>
-          <span className="value">${totalBaseFee - totalCreditValue} effective</span>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
+
       <div className="wizard-nav">
         <button className="btn btn-secondary" onClick={onBack}>← Back</button>
-        <button className="btn btn-primary" onClick={onNext}>Next: Redemption →</button>
+        <button className="btn btn-primary" onClick={onNext}>Next: Preferences →</button>
       </div>
     </>
   );
 }
 
-// ─── Step 5: Redemption ───────────────────────────────────────────────────────
-function StepRedemption({ local, setLocal, onNext, onBack }) {
-  const selected = local.redeemStyle;
+// ─── Step 3: Preferences (Redemption + Credits merged) ───────────────────────
+function StepPreferences({ local, setLocal, onNext, onBack }) {
+  const { redeemStyle, selectedCredits, ownedCards } = local;
+  const relevantCards = CARDS.filter(c => ownedCards.includes(c.id) && STATEMENT_CREDITS[c.id]);
+
+  const toggleCredit = (cardId, creditId) => {
+    const current = selectedCredits[cardId] || [];
+    const next = current.includes(creditId) ? current.filter(x => x !== creditId) : [...current, creditId];
+    setLocal(l => ({ ...l, selectedCredits: { ...l.selectedCredits, [cardId]: next } }));
+  };
+  const selectAllCredits = cardId => {
+    const allIds = (STATEMENT_CREDITS[cardId] || []).map(c => c.id);
+    setLocal(l => ({ ...l, selectedCredits: { ...l.selectedCredits, [cardId]: allIds } }));
+  };
+  const deselectAllCredits = cardId => {
+    setLocal(l => ({ ...l, selectedCredits: { ...l.selectedCredits, [cardId]: [] } }));
+  };
+  const isCreditSelected = (cardId, creditId) => (selectedCredits[cardId] || []).includes(creditId);
+  const getEffectiveFeeForCard = card => {
+    const credits = STATEMENT_CREDITS[card.id] || [];
+    const sel = selectedCredits[card.id] || [];
+    return Math.max(0, card.annualFee - credits.filter(c => sel.includes(c.id)).reduce((s, c) => s + c.value, 0));
+  };
+
   return (
     <>
-      <h2 className="step-heading">Redemption Style</h2>
-      <p className="step-subheading">How you redeem determines how we value your points.</p>
+      <h2 className="step-heading">Preferences</h2>
+      <p className="step-subheading">How you redeem points determines their value.</p>
+
       <div className="redemption-grid">
         {REDEMPTION_STYLES.map(style => {
-          const isSelected = selected === style.id;
+          const isSel = redeemStyle === style.id;
           return (
-            <button key={style.id} className={`redemption-option ${isSelected ? 'selected' : ''}`}
+            <button key={style.id} className={`redemption-option ${isSel ? 'selected' : ''}`}
               onClick={() => setLocal(l => ({ ...l, redeemStyle: style.id }))}>
               <div className="redemption-label">
                 <span className="redemption-dot" />
@@ -387,10 +316,64 @@ function StepRedemption({ local, setLocal, onNext, onBack }) {
           );
         })}
       </div>
+
+      {relevantCards.length > 0 && (
+        <>
+          <div className="pref-section-divider">
+            <span>Statement credits on your cards</span>
+            <span className="pref-section-hint">Check the ones you actually use — they reduce your effective fee</span>
+          </div>
+          {relevantCards.map(card => {
+            const credits = STATEMENT_CREDITS[card.id] || [];
+            const sel = selectedCredits[card.id] || [];
+            const allSel = credits.every(c => sel.includes(c.id));
+            const effectiveFee = getEffectiveFeeForCard(card);
+            const creditSum = card.annualFee - effectiveFee;
+            return (
+              <div className="credits-section" key={card.id}>
+                <div className="credits-card-header">
+                  <div>
+                    <span className="credits-card-name">{card.name}</span>
+                    <div className="credits-fee-calc">
+                      <span className="credits-fee-base">${card.annualFee}</span>
+                      {creditSum > 0 && (
+                        <>
+                          <span className="credits-fee-minus"> − ${creditSum} credits</span>
+                          <span className="credits-fee-equals"> = </span>
+                          <span className="credits-fee-effective">${effectiveFee} effective fee</span>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <button className={`credits-select-all ${allSel ? 'active' : ''}`}
+                    onClick={() => allSel ? deselectAllCredits(card.id) : selectAllCredits(card.id)}>
+                    {allSel ? 'Deselect all' : 'Select all'}
+                  </button>
+                </div>
+                <div className="credits-list">
+                  {credits.map(credit => (
+                    <button key={credit.id}
+                      className={`credit-item ${isCreditSelected(card.id, credit.id) ? 'selected' : ''}`}
+                      onClick={() => toggleCredit(card.id, credit.id)}>
+                      <div className="credit-checkbox" />
+                      <div className="credit-details">
+                        <div className="credit-name">{credit.label}</div>
+                        <div className="credit-desc">{credit.description}</div>
+                      </div>
+                      <div className="credit-value">−${credit.value}</div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+
       <div className="wizard-nav">
         <button className="btn btn-secondary" onClick={onBack}>← Back</button>
-        <button className="btn btn-success" onClick={onNext} disabled={!selected}
-          style={{ opacity: selected ? 1 : 0.5, cursor: selected ? 'pointer' : 'not-allowed' }}>
+        <button className="btn btn-success" onClick={onNext} disabled={!redeemStyle}
+          style={{ opacity: redeemStyle ? 1 : 0.5, cursor: redeemStyle ? 'pointer' : 'not-allowed' }}>
           See My Results →
         </button>
       </div>
@@ -398,551 +381,73 @@ function StepRedemption({ local, setLocal, onNext, onBack }) {
   );
 }
 
-// ─── Annual Bar Chart ─────────────────────────────────────────────────────────
-function AnnualBarChart({ freeData, tierData, tierName, welcomeBonus = 0 }) {
-  const [hoverYear, setHoverYear] = useState(null);
-
-  const W = 560, H = 220;
-  const padL = 60, padR = 20, padT = 24, padB = 36;
-  const plotW = W - padL - padR;
-  const plotH = H - padT - padB;
-
-  // Year-end cumulative values (index 11, 23, 35, 47, 59)
-  const years = [1, 2, 3, 4, 5];
-  const freeYr = years.map(y => freeData[y * 12 - 1] || 0);
-  const tierYr = years.map(y => tierData[y * 12 - 1] || 0);
-  // Welcome bonus contribution only in year 1 on tier side
-  const tierBase = years.map((y, i) => tierYr[i] - (i === 0 ? welcomeBonus : 0));
-
-  const maxVal = Math.max(...freeYr, ...tierYr, 0);
-  const minVal = Math.min(...freeYr, ...tierYr, 0);
-  const range = maxVal - minVal || 1;
-
-  const yOf = v => padT + plotH - ((v - minVal) / range) * plotH;
-  const zeroY = yOf(0);
-
-  // Bar layout: 5 groups, 2 bars each + gap
-  const groupW = plotW / 5;
-  const barW = groupW * 0.32;
-  const groupX = i => padL + i * groupW + groupW / 2;
-  const freeX = i => groupX(i) - barW - 2;
-  const tierX = i => groupX(i) + 2;
-
-  const barH = (v) => Math.abs(yOf(v) - zeroY);
-  const barY = (v) => v >= 0 ? yOf(v) : zeroY;
-
-  // Breakeven: first year where tier cumulative > free cumulative
-  const breakevenYear = years.find((y, i) => tierYr[i] > freeYr[i]);
-
-  // Y axis ticks
-  const tickCount = 5;
-  const yTicks = Array.from({ length: tickCount }, (_, i) => minVal + (range / (tickCount - 1)) * i);
-
-  const fmtK = v => Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${Math.round(v)}`;
-
-  // Plain-English summary
-  const yr5Adv = tierYr[4] - freeYr[4];
-  const yr1Diff = tierYr[0] - freeYr[0];
-  const annualAdv = (tierData[59] - freeData[59] - welcomeBonus) / 5; // steady-state annual advantage
-
-  return (
-    <div>
-      {/* Plain-English callout */}
-      <div className="chart-callout">
-        {welcomeBonus > 0 && (
-          <div className="chart-callout-bonus">
-            <span className="chart-callout-bonus-dot" />
-            <strong>{fmtK(welcomeBonus)}</strong> welcome bonus boosts Year 1
-          </div>
-        )}
-        <div className="chart-callout-lines">
-          {annualAdv > 0 ? (
-            <span>Earns <strong>{fmtK(annualAdv)}/yr more</strong> than Free Wallet after Year 1</span>
-          ) : (
-            <span>Earns <strong>{fmtK(Math.abs(annualAdv))}/yr less</strong> than Free Wallet on an ongoing basis</span>
-          )}
-          {breakevenYear ? (
-            <span> · Ahead by <strong>Year {breakevenYear}</strong></span>
-          ) : (
-            <span> · <strong>Doesn't surpass</strong> Free Wallet within 5 years at this spend</span>
-          )}
-          {yr5Adv !== 0 && (
-            <span> · <strong>{yr5Adv > 0 ? '+' : ''}{fmtK(yr5Adv)}</strong> cumulative vs Free over 5 years</span>
-          )}
-        </div>
-      </div>
-
-      {/* SVG bar chart */}
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        style={{ width: '100%', height: 'auto', display: 'block' }}
-        onMouseLeave={() => setHoverYear(null)}
-      >
-        {/* Grid lines */}
-        {yTicks.map((v, i) => (
-          <line key={i} x1={padL} y1={yOf(v)} x2={W - padR} y2={yOf(v)}
-            stroke="var(--gray-100)" strokeWidth="1" />
-        ))}
-
-        {/* Zero baseline */}
-        <line x1={padL} y1={zeroY} x2={W - padR} y2={zeroY}
-          stroke="var(--gray-300)" strokeWidth="1" />
-
-        {/* Bars */}
-        {years.map((yr, i) => {
-          const fv = freeYr[i];
-          const tv = tierYr[i];
-          const base = tierBase[i];
-          const wb = i === 0 ? welcomeBonus : 0;
-          const isBreakeven = yr === breakevenYear;
-          const isHover = hoverYear === i;
-
-          return (
-            <g key={yr}
-              onMouseEnter={() => setHoverYear(i)}
-              style={{ cursor: 'default' }}>
-              {/* Hover highlight */}
-              {isHover && (
-                <rect
-                  x={freeX(i) - 4} y={padT - 4}
-                  width={barW * 2 + 12} height={plotH + 8}
-                  fill="var(--gray-50)" rx="4"
-                />
-              )}
-
-              {/* Free bar */}
-              <rect
-                x={freeX(i)} y={barY(fv)}
-                width={barW} height={Math.max(2, barH(fv))}
-                fill={isHover ? 'var(--gray-400)' : 'var(--gray-300)'}
-                rx="3"
-              />
-
-              {/* Tier bar — base earnings */}
-              <rect
-                x={tierX(i)} y={barY(Math.max(0, base))}
-                width={barW} height={Math.max(2, barH(Math.max(0, base)))}
-                fill={tv > fv ? 'var(--color-success)' : '#94a3b8'}
-                rx="3"
-              />
-
-              {/* Tier bar — welcome bonus stacked on top */}
-              {wb > 0 && base >= 0 && (
-                <rect
-                  x={tierX(i)} y={yOf(base + wb)}
-                  width={barW} height={barH(wb)}
-                  fill="#6366f1"
-                  rx="3"
-                />
-              )}
-
-              {/* Breakeven year badge */}
-              {isBreakeven && (
-                <>
-                  <rect x={groupX(i) - 28} y={padT - 20} width={56} height={16} rx="8" fill="#f59e0b" />
-                  <text x={groupX(i)} y={padT - 8} textAnchor="middle" fontSize="9" fontWeight="700" fill="white">
-                    BREAKEVEN
-                  </text>
-                </>
-              )}
-
-              {/* Year label */}
-              <text x={groupX(i)} y={H - padB + 14}
-                textAnchor="middle" fontSize="11" fill="var(--gray-500)" fontWeight="500">
-                Yr {yr}
-              </text>
-
-              {/* Hover tooltip */}
-              {isHover && (() => {
-                const adv = tv - fv;
-                const tx = i < 3 ? freeX(i) - 4 : freeX(i) - 100;
-                const ty = padT;
-                return (
-                  <g>
-                    <rect x={tx} y={ty} width={120} height={wb > 0 ? 80 : 64} rx="6"
-                      fill="white" stroke="var(--gray-200)" strokeWidth="1"
-                      style={{ filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.10))' }} />
-                    <text x={tx + 10} y={ty + 15} fontSize="11" fontWeight="700" fill="var(--gray-700)">Year {yr} cumulative</text>
-                    <text x={tx + 10} y={ty + 30} fontSize="10" fill="var(--gray-500)">Free: <tspan fill="var(--gray-700)" fontWeight="600">{fmtK(fv)}</tspan></text>
-                    <text x={tx + 10} y={ty + 44} fontSize="10" fill="var(--gray-500)">{tierName}: <tspan fill={tv > fv ? 'var(--color-success)' : '#dc2626'} fontWeight="600">{fmtK(tv)}</tspan></text>
-                    {wb > 0 && <text x={tx + 10} y={ty + 58} fontSize="10" fill="#6366f1">incl. {fmtK(wb)} bonus</text>}
-                    <text x={tx + 10} y={ty + (wb > 0 ? 72 : 58)} fontSize="10" fontWeight="700"
-                      fill={adv >= 0 ? 'var(--color-success)' : '#dc2626'}>
-                      {adv >= 0 ? '▲' : '▼'} {fmtK(Math.abs(adv))} vs Free
-                    </text>
-                  </g>
-                );
-              })()}
-            </g>
-          );
-        })}
-
-        {/* Y axis labels */}
-        {yTicks.map((v, i) => (
-          <text key={i} x={padL - 6} y={yOf(v) + 4}
-            textAnchor="end" fontSize="10" fill="var(--gray-400)">
-            {fmtK(v)}
-          </text>
-        ))}
-
-        {/* Legend */}
-        <rect x={padL} y={H - 10} width={12} height={10} fill="var(--gray-300)" rx="2" />
-        <text x={padL + 16} y={H - 1} fontSize="10" fill="var(--gray-500)">Free Wallet</text>
-        <rect x={padL + 88} y={H - 10} width={12} height={10} fill="var(--color-success)" rx="2" />
-        <text x={padL + 104} y={H - 1} fontSize="10" fill="var(--gray-500)">{tierName}</text>
-        {welcomeBonus > 0 && (
-          <>
-            <rect x={padL + 88 + (tierName.length * 6) + 20} y={H - 10} width={12} height={10} fill="#6366f1" rx="2" />
-            <text x={padL + 88 + (tierName.length * 6) + 36} y={H - 1} fontSize="10" fill="var(--gray-500)">Welcome bonus</text>
-          </>
-        )}
-      </svg>
-
-      <p className="chart-assumption-note">Assumes optimal card selection per category within each wallet.</p>
-
-      {/* Year-by-year table */}
-      <table className="chart-year-table">
-        <thead>
-          <tr>
-            <th>Year</th>
-            <th>Free Wallet</th>
-            <th>{tierName}</th>
-            <th>Advantage</th>
-          </tr>
-        </thead>
-        <tbody>
-          {years.map((yr, i) => {
-            const adv = tierYr[i] - freeYr[i];
-            return (
-              <tr key={yr}>
-                <td>Yr {yr}</td>
-                <td>{fmtK(freeYr[i])}</td>
-                <td style={{ color: tierYr[i] > freeYr[i] ? 'var(--color-success)' : '#dc2626', fontWeight: 600 }}>
-                  {fmtK(tierYr[i])}
-                  {i === 0 && welcomeBonus > 0 && (
-                    <span style={{ fontSize: 10, color: '#6366f1', marginLeft: 4 }}>+{fmtK(welcomeBonus)} bonus</span>
-                  )}
-                </td>
-                <td style={{ color: adv >= 0 ? 'var(--color-success)' : '#dc2626', fontWeight: 700 }}>
-                  {adv >= 0 ? '+' : ''}{fmtK(adv)}
-                </td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
-    </div>
-  );
-}
-
-// ─── Old cumulative chart kept for reference (unused) ─────────────────────────
-function FiveYearChart({ freeData, tierData, breakeven, tierName, welcomeBonus = 0 }) {
-  const [hoverMonth, setHoverMonth] = useState(null);
-  const svgRef = useRef(null);
-
-  const W = 580, H = 230;
-  const padL = 68, padR = 24, padT = 22, padB = 42;
-  const plotW = W - padL - padR;
-  const plotH = H - padT - padB;
-
-  const allVals = [...freeData, ...tierData];
-  const minY = Math.min(0, ...allVals);
-  const maxY = Math.max(...allVals);
-  const range = maxY - minY || 1;
-
-  const xOf = m => padL + ((m - 1) / 59) * plotW;
-  const yOf = v => padT + plotH - ((v - minY) / range) * plotH;
-
-  const toPolyPts = data => data.map((v, i) => `${xOf(i + 1)},${yOf(v)}`).join(' ');
-
-  const yTicks = 5;
-  const yTickVals = Array.from({ length: yTicks }, (_, i) => minY + (range / (yTicks - 1)) * i);
-  const yearEnds = [12, 24, 36, 48, 60];
-
-  // Shaded gain area: polygon traces tier forward, free backward
-  const gainPolygon = (() => {
-    const fwd = tierData.map((v, i) => `${xOf(i + 1)},${yOf(v)}`).join(' ');
-    const bwd = [...freeData].reverse().map((v, i) => `${xOf(60 - i)},${yOf(v)}`).join(' ');
-    return `${fwd} ${bwd}`;
-  })();
-
-  // Hover: map SVG x → month
-  const handleMouseMove = e => {
-    const svg = svgRef.current;
-    if (!svg) return;
-    const rect = svg.getBoundingClientRect();
-    const svgX = (e.clientX - rect.left) * (W / rect.width);
-    const m = Math.max(1, Math.min(60, Math.round(((svgX - padL) / plotW) * 59) + 1));
-    setHoverMonth(m);
-  };
-
-  const hFree = hoverMonth != null ? freeData[hoverMonth - 1] : null;
-  const hTier = hoverMonth != null ? tierData[hoverMonth - 1] : null;
-  const hAdv  = hFree != null ? hTier - hFree : null;
-  const tooltipLeft = hoverMonth != null && hoverMonth > 40;
-  const ttX = hoverMonth != null ? xOf(hoverMonth) : 0;
-
-  const fmtK = v => v >= 1000 || v <= -1000
-    ? `$${(v / 1000).toFixed(1)}k`
-    : `$${Math.round(Math.abs(v))}`;
-  const fmtS = v => v >= 0 ? `+${fmtK(v)}` : `-${fmtK(Math.abs(v))}`;
-
-  // Year-end table data
-  const yearRows = yearEnds.map(m => ({
-    yr: m / 12,
-    free: freeData[m - 1],
-    tier: tierData[m - 1],
-    adv: tierData[m - 1] - freeData[m - 1],
-  }));
-
-  // Summary stats
-  const yr5Adv = tierData[59] - freeData[59];
-  const yr1Tier = tierData[11];
-
-  return (
-    <div>
-      {/* SVG chart */}
-      <svg
-        ref={svgRef}
-        viewBox={`0 0 ${W} ${H}`}
-        style={{ width: '100%', height: 'auto', display: 'block', cursor: 'crosshair' }}
-        onMouseMove={handleMouseMove}
-        onMouseLeave={() => setHoverMonth(null)}
-      >
-        {/* Horizontal grid lines */}
-        {yTickVals.map((v, i) => (
-          <line key={i} x1={padL} y1={yOf(v)} x2={W - padR} y2={yOf(v)}
-            stroke="var(--gray-200)" strokeWidth="1" />
-        ))}
-
-        {/* Zero baseline */}
-        {minY < 0 && (
-          <line x1={padL} y1={yOf(0)} x2={W - padR} y2={yOf(0)}
-            stroke="var(--gray-300)" strokeWidth="1.5" strokeDasharray="4 3" />
-        )}
-
-        {/* Shaded gain area between lines */}
-        <polygon points={gainPolygon}
-          fill={yr5Adv >= 0 ? 'rgba(29,158,117,0.10)' : 'rgba(220,38,38,0.08)'}
-          stroke="none" />
-
-        {/* Breakeven vertical */}
-        {breakeven && (() => {
-          const bx = xOf(breakeven);
-          const intY = (yOf(freeData[breakeven - 1]) + yOf(tierData[breakeven - 1])) / 2;
-          const labelRight = breakeven < 42;
-          return (
-            <>
-              <line x1={bx} y1={padT} x2={bx} y2={H - padB}
-                stroke="#f59e0b" strokeWidth="2" strokeDasharray="5 3" />
-              <circle cx={bx} cy={intY} r="6"
-                fill="#f59e0b" stroke="white" strokeWidth="2" />
-              <rect x={labelRight ? bx + 8 : bx - 90} y={intY - 22}
-                width="82" height="18" rx="4"
-                fill="#fffbeb" stroke="#f59e0b" strokeWidth="1" />
-              <text x={labelRight ? bx + 49 : bx - 49} y={intY - 9}
-                textAnchor="middle" fontSize="10" fill="#92400e" fontWeight="700">
-                Breakeven mo.{breakeven}
-              </text>
-            </>
-          );
-        })()}
-
-        {/* Welcome bonus spike annotation at month 1 */}
-        {welcomeBonus > 0 && (() => {
-          const x1 = xOf(1);
-          const y1t = yOf(tierData[0]);
-          return (
-            <>
-              <line x1={x1} y1={y1t - 4} x2={x1} y2={y1t - 20}
-                stroke="#6366f1" strokeWidth="1.5" />
-              <rect x={x1 + 4} y={y1t - 30} width={72} height={16} rx="3"
-                fill="#eef2ff" stroke="#6366f1" strokeWidth="1" />
-              <text x={x1 + 40} y={y1t - 19}
-                textAnchor="middle" fontSize="9" fill="#4338ca" fontWeight="600">
-                +{fmtK(welcomeBonus)} bonus
-              </text>
-            </>
-          );
-        })()}
-
-        {/* Free wallet line */}
-        <polyline points={toPolyPts(freeData)}
-          fill="none" stroke="var(--gray-400)" strokeWidth="2" strokeDasharray="6 4" />
-
-        {/* Tier line */}
-        <polyline points={toPolyPts(tierData)}
-          fill="none" stroke="var(--color-success)" strokeWidth="2.5" />
-
-        {/* Year-end dots + value labels */}
-        {yearEnds.map(m => {
-          const fv = freeData[m - 1];
-          const tv = tierData[m - 1];
-          const cx = xOf(m);
-          const fAbove = fv > tv;
-          const showLabel = m === 60; // only label Yr 5 end-of-line
-          return (
-            <g key={m}>
-              <circle cx={cx} cy={yOf(fv)} r="3.5" fill="white" stroke="var(--gray-400)" strokeWidth="2" />
-              <circle cx={cx} cy={yOf(tv)} r="3.5" fill="white" stroke="var(--color-success)" strokeWidth="2" />
-              {showLabel && (
-                <>
-                  <text x={cx + 5} y={yOf(fv) + 4} fontSize="9" fill="var(--gray-500)" fontWeight="600">
-                    {fmtK(fv)}
-                  </text>
-                  <text x={cx + 5} y={yOf(tv) + 4} fontSize="9" fill="var(--color-success)" fontWeight="700">
-                    {fmtK(tv)}
-                  </text>
-                </>
-              )}
-            </g>
-          );
-        })}
-
-        {/* Hover cursor + dots */}
-        {hoverMonth != null && (
-          <>
-            <line x1={ttX} y1={padT} x2={ttX} y2={H - padB}
-              stroke="var(--gray-300)" strokeWidth="1" />
-            <circle cx={ttX} cy={yOf(hFree)} r="4"
-              fill="var(--gray-400)" stroke="white" strokeWidth="1.5" />
-            <circle cx={ttX} cy={yOf(hTier)} r="4"
-              fill="var(--color-success)" stroke="white" strokeWidth="1.5" />
-            {/* Tooltip box */}
-            {(() => {
-              const tw = 148, th = 68, tx = tooltipLeft ? ttX - tw - 10 : ttX + 10;
-              const ty = padT + 4;
-              const advColor = hAdv >= 0 ? 'var(--color-success)' : '#dc2626';
-              const yr = (hoverMonth / 12).toFixed(1);
-              return (
-                <g>
-                  <rect x={tx} y={ty} width={tw} height={th} rx="6"
-                    fill="white" stroke="var(--gray-200)" strokeWidth="1"
-                    style={{ filter: 'drop-shadow(0 2px 6px rgba(0,0,0,0.12))' }} />
-                  <text x={tx + 10} y={ty + 16} fontSize="10" fontWeight="700" fill="var(--gray-700)">
-                    Mo. {hoverMonth} (Yr {yr})
-                  </text>
-                  <line x1={tx + 8} y1={ty + 21} x2={tx + tw - 8} y2={ty + 21}
-                    stroke="var(--gray-200)" strokeWidth="1" />
-                  <text x={tx + 10} y={ty + 34} fontSize="10" fill="var(--gray-500)">
-                    Free:
-                  </text>
-                  <text x={tx + tw - 10} y={ty + 34} fontSize="10" fill="var(--gray-600)" textAnchor="end">
-                    {fmtK(hFree)}
-                  </text>
-                  <text x={tx + 10} y={ty + 48} fontSize="10" fill="var(--gray-500)">
-                    {tierName}:
-                  </text>
-                  <text x={tx + tw - 10} y={ty + 48} fontSize="10" fill="var(--color-success)" fontWeight="600" textAnchor="end">
-                    {fmtK(hTier)}
-                  </text>
-                  <text x={tx + 10} y={ty + 62} fontSize="10" fontWeight="700" fill={advColor}>
-                    {hAdv >= 0 ? '▲' : '▼'} {fmtS(hAdv)} vs Free
-                  </text>
-                </g>
-              );
-            })()}
-          </>
-        )}
-
-        {/* Y axis labels */}
-        {yTickVals.map((v, i) => (
-          <text key={i} x={padL - 6} y={yOf(v) + 4}
-            textAnchor="end" fontSize="10" fill="var(--gray-400)">
-            {v >= 1000 || v <= -1000 ? `$${Math.round(v / 1000)}k` : `$${Math.round(v)}`}
-          </text>
-        ))}
-
-        {/* X axis year labels */}
-        {yearEnds.map(m => (
-          <text key={m} x={xOf(m)} y={H - padB + 16}
-            textAnchor="middle" fontSize="10" fill="var(--gray-400)">
-            Yr {m / 12}
-          </text>
-        ))}
-
-        {/* Legend */}
-        <line x1={padL} y1={H - 9} x2={padL + 22} y2={H - 9}
-          stroke="var(--gray-400)" strokeWidth="2" strokeDasharray="6 4" />
-        <text x={padL + 26} y={H - 5} fontSize="10" fill="var(--gray-500)">Free Wallet</text>
-        <line x1={padL + 102} y1={H - 9} x2={padL + 124} y2={H - 9}
-          stroke="var(--color-success)" strokeWidth="2.5" />
-        <text x={padL + 128} y={H - 5} fontSize="10" fill="var(--gray-500)">{tierName}</text>
-      </svg>
-
-      {/* Summary pills */}
-      <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap', margin: '12px 0 14px' }}>
-        <div className="chart-stat-pill">
-          <span className="chart-stat-label">Yr 1 value</span>
-          <span className="chart-stat-value" style={{ color: yr1Tier >= 0 ? 'var(--color-success)' : '#dc2626' }}>
-            {fmtK(yr1Tier)}
-          </span>
-        </div>
-        <div className="chart-stat-pill">
-          <span className="chart-stat-label">5-yr advantage</span>
-          <span className="chart-stat-value" style={{ color: yr5Adv >= 0 ? 'var(--color-success)' : '#dc2626' }}>
-            {yr5Adv >= 0 ? '+' : ''}{fmtK(yr5Adv)} vs Free
-          </span>
-        </div>
-        <div className="chart-stat-pill">
-          <span className="chart-stat-label">Breakeven</span>
-          <span className="chart-stat-value" style={{ color: breakeven ? '#92400e' : 'var(--gray-500)' }}>
-            {breakeven ? `Month ${breakeven}` : 'Never (5 yr)'}
-          </span>
-        </div>
-        {welcomeBonus > 0 && (
-          <div className="chart-stat-pill">
-            <span className="chart-stat-label">Welcome bonus</span>
-            <span className="chart-stat-value" style={{ color: '#4338ca' }}>{fmtK(welcomeBonus)}</span>
-          </div>
-        )}
-      </div>
-
-      {/* Year-end comparison table */}
-      <table className="chart-year-table">
-        <thead>
-          <tr>
-            <th>Year</th>
-            <th>Free Wallet</th>
-            <th>{tierName}</th>
-            <th>Advantage</th>
-          </tr>
-        </thead>
-        <tbody>
-          {yearRows.map(r => (
-            <tr key={r.yr}>
-              <td>Yr {r.yr}</td>
-              <td>{fmtK(r.free)}</td>
-              <td style={{ color: r.tier > r.free ? 'var(--color-success)' : '#dc2626', fontWeight: 600 }}>
-                {fmtK(r.tier)}
-              </td>
-              <td style={{ color: r.adv >= 0 ? 'var(--color-success)' : '#dc2626', fontWeight: 700 }}>
-                {r.adv >= 0 ? '+' : ''}{fmtK(r.adv)}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
+// ─── Shared helper ───────────────────────────────────────────────────────────
+function formatRawBonus(card) {
+  const wb = card?.welcomeBonus;
+  if (!wb || wb.amount === 0) return null;
+  if (wb.isCashbackMatch) return 'Cashback Match';
+  if (wb.type === 'cashback') return `$${wb.amount.toLocaleString()} cash back`;
+  if (wb.type === 'miles')   return `${wb.amount.toLocaleString()} miles`;
+  return `${wb.amount.toLocaleString()} pts`;
 }
 
 // ─── Recommendation Banner ────────────────────────────────────────────────────
-function RecommendationBanner({ tiers, ownedCards, totalMonthlySpend, spend, redeemStyle }) {
-  const freeTier = tiers.find(t => t.id === 'free');
-  const paidTiers = tiers.filter(t => t.id !== 'free');
+function RecommendationBanner({ tiers, ownedCards, heldCards = [], totalMonthlySpend, spend, redeemStyle }) {
+  // Use 'current' as baseline if it exists, else fall back to 'free'
+  const baseline = tiers.find(t => t.id === 'current') || tiers.find(t => t.id === 'free');
+  const upgradeTiers = tiers.filter(t => t.id !== 'current' && t.id !== 'free');
+  if (!baseline || upgradeTiers.length === 0) return null;
 
-  // Score each paid tier: ongoing advantage weighted 3:1 over amortized bonus
+  // Alias so rest of logic stays readable
+  const freeTier = baseline;
+  const paidTiers = upgradeTiers;
+
+  // Score by 3-year total: year1 (ongoing + bonus) + 2 more years of ongoing.
+  // This gives the welcome bonus real but bounded weight — it matters in year 1,
+  // but the ongoing rate dominates by year 3. canHitSpend ensures the bonus is achievable.
+  const threeYr = t => t.year1 + t.netPerYear * 2;
+
   const scored = paidTiers.map(t => ({
     ...t,
-    score: (t.netPerYear - freeTier.netPerYear) * 3 + t.welcomeBonus / 5,
+    score: threeYr(t),
     ongoingAdv: t.netPerYear - freeTier.netPerYear,
     year1Adv: t.year1 - freeTier.year1,
   })).sort((a, b) => b.score - a.score);
 
-  const best = scored[0];
-  const freeIsBest = best.ongoingAdv <= 0 && best.year1Adv <= 0;
+  // Hard filter: only recommend tiers where the user can actually hit every new card's
+  // minimum spend requirement without increasing their monthly spending.
+  const canHitSpend = (tier) => {
+    for (const cid of tier.cards) {
+      if (ownedCards.includes(cid) || heldCards.includes(cid)) continue;
+      const card = CARDS.find(c => c.id === cid);
+      const wb = card?.welcomeBonus;
+      if (!wb || wb.spend === 0 || wb.isCashbackMatch) continue;
+      if (totalMonthlySpend < wb.spend / wb.months) return false;
+    }
+    return true;
+  };
+
+  const achievable = scored.filter(canHitSpend);
+  const best = achievable.length > 0 ? achievable[0] : scored[0];
+  // Free/current wins if its 3-year total beats the best achievable paid tier
+  const freeIsBest = threeYr(best) <= threeYr(freeTier);
   const newCards = best.cards.filter(cid => !ownedCards.includes(cid));
+
+  // "Spend up" nudge: best out-of-reach tier with a better 3-year total
+  const nextUp = scored.find(t => !canHitSpend(t) && threeYr(t) > threeYr(best));
+  const nextUpMonthlyNeeded = nextUp
+    ? Math.ceil(Math.max(...nextUp.cards
+        .filter(cid => !ownedCards.includes(cid) && !heldCards.includes(cid))
+        .map(cid => {
+          const card = CARDS.find(c => c.id === cid);
+          const wb = card?.welcomeBonus;
+          return (wb?.spend && wb.months) ? wb.spend / wb.months : 0;
+        })
+      ))
+    : 0;
+  const nextUpSpendMore = nextUp ? Math.max(0, nextUpMonthlyNeeded - totalMonthlySpend) : 0;
+  const nextUp5yr = nextUp ? nextUp.year1 + nextUp.netPerYear * 4 : 0;
+  const best5yr = best.year1 + best.netPerYear * 4;
 
   // Find which categories drive the advantage (best tier rate vs free tier rate)
   const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
@@ -987,53 +492,134 @@ function RecommendationBanner({ tiers, ownedCards, totalMonthlySpend, spend, red
     return `Driven by your ${parts.join(', ')} and ${last}.`;
   };
 
-  const whySentence = buildWhySentence();
+  // Build a plain-English summary explaining why this tier was picked
+  const buildSummaryText = () => {
+    const monthlyStr = fmt(totalMonthlySpend);
+
+    if (freeIsBest) {
+      const gap = fmt(Math.abs(best.ongoingAdv));
+      const baselineLabel = freeTier.id === 'current' ? 'your current cards' : 'your no-fee cards';
+      return `At ${monthlyStr}/mo, even the best paid option (${best.name}) costs ${gap}/yr more in fees than it earns back in rewards. Stick with ${baselineLabel}.`;
+    }
+
+    // Was a higher tier filtered out because it's out of reach?
+    if (nextUp) {
+      return `At ${monthlyStr}/mo, ${best.name} earns you ${fmt(best.ongoingAdv)}/yr more after fees and is the best combo you can unlock with your current spending. ${nextUp.name} would earn more, but its bonus spend requirements need ${fmt(nextUpMonthlyNeeded)}/mo — more than you currently spend.`;
+    }
+
+    // Most premium achievable tier that scored worse
+    const skipped = achievable
+      .slice(1)
+      .sort((a, b) => b.effectiveFee - a.effectiveFee)[0];
+
+    if (skipped && skipped.netPerYear < best.netPerYear) {
+      const skippedOngoing = skipped.netPerYear - freeTier.netPerYear;
+      const verdict = skippedOngoing < 0
+        ? `${skipped.name}'s annual fee would cost you ${fmt(Math.abs(skippedOngoing))}/yr more than it earns back`
+        : `${skipped.name} would only net ${fmt(skippedOngoing)}/yr — ${fmt(best.ongoingAdv - skippedOngoing)} less for a higher fee`;
+      return `At ${monthlyStr}/mo, ${best.name} earns you ${fmt(best.ongoingAdv)}/yr more after fees — the best return for what you actually spend. ${verdict}.`;
+    }
+
+    return `At ${monthlyStr}/mo, ${best.name} earns you ${fmt(best.ongoingAdv)}/yr more after fees than your current setup — without spending a dollar more.`;
+  };
+
+  const summaryText = buildSummaryText();
 
   if (freeIsBest) {
     return (
       <div className="rec-banner rec-free">
         <div className="rec-icon">✓</div>
         <div className="rec-content">
-          <div className="rec-headline">Your free wallet is the right call at this spend level</div>
-          <div className="rec-detail">
-            The best paid option ({best.name}) costs {fmt(Math.abs(best.ongoingAdv))}/yr more in fees than it earns back.
-            Focus on activating your rotating categories and routing spend to the right card.
-          </div>
+          <div className="rec-headline">{freeTier.id === 'current' ? 'Your current wallet is the right call' : 'Your free wallet is the right call'}</div>
+          <div className="rec-detail">{summaryText}</div>
         </div>
       </div>
     );
   }
 
+  const redemptionStyle = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+
   return (
     <div className="rec-banner rec-paid">
-      <div className="rec-icon">★</div>
-      <div className="rec-content">
-        <div className="rec-headline">
-          Upgrade to <strong>{best.name}</strong>
-        </div>
-        <div className="rec-stats">
+      {/* Summary: plain-English spend-aware rationale */}
+      {summaryText && <div className="rec-summary">{summaryText}</div>}
+
+      {/* Row 1: headline + KPI chips */}
+      <div className="rec-top">
+        <div className="rec-headline">Upgrade to <strong>{best.name}</strong></div>
+        <div className="rec-kpis">
           {best.ongoingAdv > 0 && (
-            <span className="rec-stat"><strong>{fmt(best.ongoingAdv)}/yr</strong> more than Free after fees</span>
+            <span className="rec-kpi">{fmt(best.ongoingAdv)}/yr ongoing</span>
           )}
           {best.welcomeBonus > 0 && best.year1Adv > 0 && (
-            <span className="rec-stat"><strong>{fmt(best.year1Adv)}</strong> ahead in Year 1 with bonus</span>
-          )}
-          {best.breakeven && (
-            <span className="rec-stat">Pays back in <strong>month {best.breakeven}</strong></span>
+            <span className="rec-kpi rec-kpi-accent">{fmt(best.year1Adv)} in Year 1</span>
           )}
         </div>
-        {whySentence && <div className="rec-why">{whySentence}</div>}
-        {newCards.length > 0 ? (
-          <div className="rec-cards-needed">
-            {newCards.length} new application{newCards.length > 1 ? 's' : ''} needed:&nbsp;
-            {newCards.map(cid => CARDS.find(c => c.id === cid)?.name).join(', ')}
-          </div>
-        ) : (
-          <div className="rec-cards-needed rec-owned">
-            You already own all the cards — just optimize your routing.
-          </div>
-        )}
       </div>
+
+      {/* Row 2: per-card application rows */}
+      {newCards.length > 0 ? (
+        <div className="rec-applications">
+          {newCards.map(cid => {
+            const card = CARDS.find(c => c.id === cid);
+            if (!card) return null;
+            const wb = card.welcomeBonus;
+            const rawBonus = formatRawBonus(card);
+            const dollarVal = !wb || wb.amount === 0 ? 0
+              : wb.type === 'cashback' ? wb.amount
+              : Math.round(wb.amount * ((redemptionStyle?.valuations[card.issuer] || 1.0) / 100));
+
+            let feasibility = null, statusLine = null;
+            if (wb && wb.spend > 0 && totalMonthlySpend > 0) {
+              const monthlyNeeded = Math.ceil(wb.spend / wb.months);
+              const shortfall = Math.max(0, monthlyNeeded - totalMonthlySpend);
+              const pct = Math.min(100, (totalMonthlySpend / monthlyNeeded) * 100);
+              feasibility = pct >= 100 ? 'easy' : pct >= 65 ? 'stretch' : 'hard';
+              if (feasibility === 'easy') {
+                statusLine = <>Put <strong>{fmt(monthlyNeeded)}/mo</strong> on this card for {wb.months} months — your existing spend covers it.</>;
+              } else if (feasibility === 'stretch') {
+                statusLine = <>Requires all your spending on this card + <strong>{fmt(shortfall)}/mo more</strong> for {wb.months} months.</>;
+              } else {
+                statusLine = <>You'd still be <strong>{fmt(shortfall)}/mo short</strong> even with all spend here — only viable with a large purchase.</>;
+              }
+            }
+
+            return (
+              <div key={cid} className={`rec-app-row${feasibility ? ` rec-app-${feasibility}` : ''}`}>
+                <div className="rec-app-top">
+                  <span className="rec-app-name">{card.name}</span>
+                  {rawBonus && dollarVal > 0 && (
+                    <span className="rec-app-bonus">{rawBonus} <span className="rec-app-bonus-val">≈ {fmt(dollarVal)}</span></span>
+                  )}
+                  {wb && wb.spend > 0 && (
+                    <span className="rec-app-req">Spend {fmt(wb.spend)} in {wb.months}mo</span>
+                  )}
+                  {feasibility && (
+                    <span className={`rec-app-badge rec-app-badge-${feasibility}`}>
+                      {feasibility === 'easy' ? 'Achievable' : feasibility === 'stretch' ? 'Stretch' : 'Difficult'}
+                    </span>
+                  )}
+                </div>
+                {statusLine && <div className="rec-app-status">{statusLine}</div>}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="rec-owned-note">You already own all the cards — just optimize your routing.</div>
+      )}
+
+      {/* Spend-up nudge: show what they'd unlock by spending a bit more */}
+      {nextUp && nextUpSpendMore > 0 && (nextUp5yr - best5yr) > 50 && (
+        <div className="rec-spendUp">
+          <span className="rec-spendUp-icon">↑</span>
+          <span className="rec-spendUp-text">
+            Spend <strong>{fmt(nextUpSpendMore)}/mo more</strong> and {nextUp.name} becomes reachable
+            — that's <strong>{fmt(nextUp5yr - best5yr)} more over 5 years</strong>.
+          </span>
+        </div>
+      )}
+
     </div>
   );
 }
@@ -1257,25 +843,146 @@ function NetAdvantageChart({ freeData, tierData, tierName, welcomeBonus = 0 }) {
   );
 }
 
+// Compute welcome bonus discounted by spend feasibility.
+// Each new card's dollar bonus is multiplied by how achievable the spend req is.
+// A $900 bonus requiring $4k/3mo is worth $900 if you spend $2k/mo (covers it),
+// but only $450 if you spend $1k/mo (50% coverage).
+function adjustedWelcomeBonus(tierCards, ownedCards, heldCards, totalMonthlySpend, redeemStyle) {
+  const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+  let total = 0;
+  for (const cardId of tierCards) {
+    if (ownedCards.includes(cardId) || heldCards.includes(cardId)) continue;
+    const card = CARDS.find(c => c.id === cardId);
+    if (!card?.welcomeBonus?.amount) continue;
+    const wb = card.welcomeBonus;
+    const dollarBonus = wb.isCashbackMatch ? 0 // dynamic; ignore in scoring
+      : wb.type === 'cashback' ? wb.amount
+      : Math.round(wb.amount * ((style?.valuations[card.issuer] || 1.0) / 100));
+    const feasibility = wb.spend > 0 && totalMonthlySpend > 0
+      ? Math.min(1, (totalMonthlySpend * wb.months) / wb.spend)
+      : 1;
+    total += dollarBonus * feasibility;
+  }
+  return total;
+}
+
+function buildBonusItems(cardIds, ownedCards, heldCards, redeemStyle) {
+  const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+  return cardIds
+    .filter(cid => !ownedCards.includes(cid) && !heldCards.includes(cid))
+    .map(cid => {
+      const card = CARDS.find(c => c.id === cid);
+      const raw = formatRawBonus(card);
+      if (!raw || !card?.welcomeBonus?.amount) return null;
+      const rawDollar = card.welcomeBonus.type === 'cashback'
+        ? card.welcomeBonus.amount
+        : Math.round(card.welcomeBonus.amount * ((style?.valuations[card.issuer] || 1.0) / 100));
+      const shortName = card.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '');
+      return { name: shortName, raw, dollar: fmt(rawDollar), rawDollar };
+    })
+    .filter(Boolean);
+}
+
+// ─── Bonus breakdown popover ──────────────────────────────────────────────────
+function BonusBreakdown({ items }) {
+  const [visible, setVisible] = useState(false);
+  if (!items || items.length === 0) return null;
+  return (
+    <span
+      className="bonus-breakdown-wrap"
+      onMouseEnter={() => setVisible(true)}
+      onMouseLeave={() => setVisible(false)}
+    >
+      <span className="cmp-tooltip-icon">?</span>
+      {visible && (
+        <span className="bonus-breakdown-pop">
+          {items.map((item, i) => (
+            <span key={i} className="bonus-breakdown-row">
+              <span className="bonus-breakdown-name">{item.name}</span>
+              <span className="bonus-breakdown-val">{item.raw} <span className="bonus-breakdown-dol">({item.dollar})</span></span>
+            </span>
+          ))}
+          {items.length > 1 && (
+            <span className="bonus-breakdown-total">
+              <span>Total</span>
+              <span>{fmt(items.reduce((s, i) => s + i.rawDollar, 0))}</span>
+            </span>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
+
 // ─── Side-by-Side Comparison ──────────────────────────────────────────────────
-function TierComparison({ tiers }) {
-  const [idA, setIdA] = useState(tiers[0]?.id);
-  const [idB, setIdB] = useState(tiers[2]?.id || tiers[1]?.id);
+function TierComparison({ tiers, defaultA, defaultB, totalMonthlySpend, ownedCards = [], heldCards = [], redeemStyle = 'portal' }) {
+  const [idA, setIdA] = useState(defaultA ?? tiers[0]?.id);
+  const [idB, setIdB] = useState(defaultB ?? tiers[2]?.id ?? tiers[1]?.id);
   const tA = tiers.find(t => t.id === idA);
   const tB = tiers.find(t => t.id === idB);
   if (!tA || !tB) return null;
 
-  const metrics = [
-    { label: 'Annual Earnings',  a: tA.earnings,    b: tB.earnings,    fmt: fmt,  note: '' },
-    { label: 'Effective Fee',    a: -tA.effectiveFee, b: -tB.effectiveFee, fmt: v => v === 0 ? '$0' : `−${fmt(Math.abs(v))}`, note: 'after credits' },
-    { label: 'Net / Year',       a: tA.netPerYear,  b: tB.netPerYear,  fmt: fmt,  note: 'earnings − fees' },
-    { label: 'Welcome Bonus',    a: tA.welcomeBonus, b: tB.welcomeBonus, fmt: v => v > 0 ? fmt(v) : '—', note: 'new cards only' },
-    { label: 'Year 1 Total',     a: tA.year1,       b: tB.year1,       fmt: fmt,  note: 'net + bonus' },
-  ];
+  // 3-year totals: welcome bonus counts once (already in year1), then netPerYear × 2 more
+  const threeYearA = tA.year1 + tA.netPerYear * 2;
+  const threeYearB = tB.year1 + tB.netPerYear * 2;
+  const threeYearDelta = threeYearB - threeYearA; // positive → B wins
 
-  const delta = tA.netPerYear - tB.netPerYear;
-  const year1Delta = tA.year1 - tB.year1;
-  const winner = delta > 0 ? tA : delta < 0 ? tB : null;
+  // Winner determined by 3-year total
+  const winner3yr = Math.abs(threeYearDelta) < 1 ? null : threeYearDelta > 0 ? tB : tA;
+  const annualDelta = tB.netPerYear - tA.netPerYear; // positive → B better annually
+
+  // Break-even: how many months until the cumulative advantage crosses zero
+  // cumX[m] = welcomeBonus + netPerYear * m/12
+  let breakevenMonth = null;
+  if (winner3yr) {
+    const [win, lose] = threeYearDelta > 0 ? [tB, tA] : [tA, tB];
+    for (let m = 1; m <= 60; m++) {
+      const cumWin  = win.welcomeBonus  + win.netPerYear  * m / 12;
+      const cumLose = lose.welcomeBonus + lose.netPerYear * m / 12;
+      if (cumWin > cumLose) { breakevenMonth = m; break; }
+    }
+  }
+
+  const redeemLabel = REDEMPTION_STYLES.find(r => r.id === (tA.redeemStyle || tB.redeemStyle))?.label || 'your redemption style';
+
+  const metrics = [
+    {
+      label: 'Annual Earnings',
+      tooltip: 'The best card in this wallet for each spending category, multiplied by your monthly spend and point valuation. Assumes you always use the highest-earning card for each purchase.',
+      a: tA.earnings, b: tB.earnings, fmt: fmt,
+    },
+    {
+      label: 'Effective Fee',
+      tooltip: 'Total annual fees minus any statement credits you selected (e.g. $120 Amex dining credit). This is your real out-of-pocket cost after offsets.',
+      a: -tA.effectiveFee, b: -tB.effectiveFee,
+      fmt: v => v === 0 ? '$0' : `−${fmt(Math.abs(v))}`,
+      higherWins: false,
+    },
+    {
+      label: 'Net / Year',
+      tooltip: 'Annual Earnings minus Effective Fee. What you actually keep each year on an ongoing basis — the most honest apples-to-apples number.',
+      a: tA.netPerYear, b: tB.netPerYear, fmt: fmt,
+    },
+    {
+      label: 'Welcome Bonus',
+      tooltip: 'One-time signup bonus for new cards only — not counted for cards you already own. Converted to dollars at your selected redemption style. Requires hitting the minimum spend within the offer window.',
+      a: tA.welcomeBonus, b: tB.welcomeBonus,
+      fmt: v => v > 0 ? fmt(v) : '—',
+      bonusItemsA: buildBonusItems(tA.cards, ownedCards, heldCards, redeemStyle),
+      bonusItemsB: buildBonusItems(tB.cards, ownedCards, heldCards, redeemStyle),
+    },
+    {
+      label: 'Year 1 Total',
+      tooltip: 'Net/Year plus the welcome bonus. Your best-case first year, assuming you hit the minimum spend for every signup bonus.',
+      a: tA.year1, b: tB.year1, fmt: fmt,
+    },
+    {
+      label: '3-Year Total',
+      tooltip: 'Year 1 Total plus Net/Year for years 2–3. Bonuses counted once. Assumes your spending stays consistent — adjust the spend inputs to model changes.',
+      a: threeYearA, b: threeYearB, fmt: fmt,
+      highlight: true,
+    },
+  ];
 
   return (
     <div className="tier-comparison">
@@ -1294,8 +1001,8 @@ function TierComparison({ tiers }) {
         {/* Column headers */}
         <div className="comparison-row comparison-header">
           <div className="comparison-metric" />
-          <div className={`comparison-col-header ${delta > 0 ? 'winner' : ''}`}>{tA.name}</div>
-          <div className={`comparison-col-header ${delta < 0 ? 'winner' : ''}`}>{tB.name}</div>
+          <div className={`comparison-col-header ${threeYearA > threeYearB ? 'winner' : ''}`}>{tA.name}</div>
+          <div className={`comparison-col-header ${threeYearB > threeYearA ? 'winner' : ''}`}>{tB.name}</div>
         </div>
 
         {/* Cards row */}
@@ -1317,38 +1024,169 @@ function TierComparison({ tiers }) {
 
         {/* Metric rows */}
         {metrics.map(m => {
-          const aWins = m.a > m.b;
-          const bWins = m.b > m.a;
+          const higherWins = m.higherWins !== false;
+          const aWins = higherWins ? m.a > m.b : m.a < m.b;
+          const bWins = higherWins ? m.b > m.a : m.b < m.a;
           return (
-            <div key={m.label} className="comparison-row">
+            <div key={m.label} className={`comparison-row${m.highlight ? ' comparison-row-highlight' : ''}`}>
               <div className="comparison-metric">
-                {m.label}
+                <span className="comparison-metric-label">
+                  {m.label}
+                  {m.tooltip && (
+                    <span className="cmp-tooltip-wrap">
+                      <span className="cmp-tooltip-icon">?</span>
+                      <span className="cmp-tooltip-box">
+                        {m.tooltip.split('\n').map((line, i) => (
+                          <span key={i} style={{ display: 'block' }}>{line}</span>
+                        ))}
+                      </span>
+                    </span>
+                  )}
+                </span>
                 {m.note && <span className="comparison-note">{m.note}</span>}
               </div>
               <div className={`comparison-cell ${aWins ? 'cell-winner' : bWins ? 'cell-loser' : ''}`}>
                 {aWins && <span className="cell-check">✓</span>}
                 {m.fmt(m.a)}
+                {m.bonusItemsA && <BonusBreakdown items={m.bonusItemsA} />}
               </div>
               <div className={`comparison-cell ${bWins ? 'cell-winner' : aWins ? 'cell-loser' : ''}`}>
                 {bWins && <span className="cell-check">✓</span>}
                 {m.fmt(m.b)}
+                {m.bonusItemsB && <BonusBreakdown items={m.bonusItemsB} />}
               </div>
             </div>
           );
         })}
       </div>
 
-      {/* Verdict */}
-      <div className={`comparison-verdict ${winner ? '' : 'tied'}`}>
-        {winner
-          ? <>
-              <strong>{winner.name}</strong> wins —&nbsp;
-              {Math.abs(delta) > 0 && <>{fmt(Math.abs(delta))}/yr more on an ongoing basis</>}
-              {Math.abs(year1Delta) > 0 && Math.abs(delta) > 0 && ', '}
-              {Math.abs(year1Delta) > 0 && <>{fmt(Math.abs(year1Delta))} better in Year 1</>}
-            </>
-          : 'These wallets perform equally at your spend level'}
+      {/* Aha callout */}
+      {winner3yr ? (
+        <div className="comparison-aha">
+          <div className="comparison-aha-left">
+            <div className="comparison-aha-label">3-year advantage</div>
+            <div className="comparison-aha-number">{fmt(Math.abs(threeYearDelta))}</div>
+            <div className="comparison-aha-name">more with {winner3yr.name}</div>
+          </div>
+          <div className="comparison-aha-pills">
+            {Math.abs(annualDelta) >= 1 && (
+              <span className="comparison-aha-pill">
+                {fmt(Math.abs(annualDelta))}/yr ongoing edge
+              </span>
+            )}
+            {winner3yr.welcomeBonus > 0 && (
+              <span className="comparison-aha-pill">
+                {fmt(winner3yr.welcomeBonus)} welcome bonus (Year 1)
+              </span>
+            )}
+          </div>
+        </div>
+      ) : (
+        <div className="comparison-verdict tied">These wallets perform equally at your spend level</div>
+      )}
+
+      {/* Footnote */}
+      <p className="comparison-footnote">
+        Projections assume your{totalMonthlySpend > 0 ? ` ${fmt(totalMonthlySpend)}/mo` : ''} spending pattern stays consistent over 3 years.
+        Welcome bonuses are shown at full value in Year 1 — actual payout depends on hitting the minimum spend requirement within the offer window.
+        Point valuations reflect your selected redemption style.
+      </p>
+    </div>
+  );
+}
+
+// ─── Custom Combo Builder ─────────────────────────────────────────────────────
+function CustomComboBuilder({ spend, selectedCredits, redeemStyle, heldCards, activationStatus, currentTier }) {
+  const [customCards, setCustomCards] = useState([]);
+
+  const toggle = id => setCustomCards(prev =>
+    prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]
+  );
+
+  const earnings   = customCards.length > 0 ? calculateWalletEarnings(customCards, spend, activationStatus, redeemStyle) : 0;
+  const effectiveFee = customCards.reduce((s, id) => s + calculateEffectiveFee(id, selectedCredits), 0);
+  const netPerYear = earnings - effectiveFee;
+
+  let wb = 0;
+  for (const cardId of customCards) {
+    if (heldCards.includes(cardId)) continue;
+    const card = CARDS.find(c => c.id === cardId);
+    if (!card?.welcomeBonus) continue;
+    const wbObj = card.welcomeBonus;
+    if (wbObj.isCashbackMatch) {
+      wb += calculateWalletEarnings([cardId], spend, activationStatus, redeemStyle);
+    } else if (wbObj.type === 'cashback') {
+      wb += wbObj.amount;
+    } else {
+      const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+      wb += wbObj.amount * ((style?.valuations[card.issuer] || 1.0) / 100);
+    }
+  }
+
+  const vsCurrentNet = currentTier ? netPerYear - currentTier.netPerYear : null;
+
+  return (
+    <div className="custom-builder">
+      <div className="custom-builder-header">
+        <div>
+          <h3 className="custom-builder-title">Build Your Own Combo</h3>
+          <p className="custom-builder-desc">Mix and match any cards to see live earnings for your spend profile.</p>
+        </div>
       </div>
+
+      <div className="custom-chip-grid">
+        {CARDS.map(card => {
+          const sel = customCards.includes(card.id);
+          return (
+            <button key={card.id}
+              className={`custom-chip ${sel ? 'selected' : ''}`}
+              onClick={() => toggle(card.id)}>
+              <span className="custom-chip-dot" style={{ background: card.color }} />
+              <span className="custom-chip-name">
+                {card.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '')}
+              </span>
+              {card.annualFee > 0 && <span className="custom-chip-fee">${card.annualFee}</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {customCards.length > 0 ? (
+        <div className="custom-stats">
+          <div className="custom-stat">
+            <span className="custom-stat-label">Annual Earnings</span>
+            <span className="custom-stat-value">{fmt(earnings)}</span>
+          </div>
+          <div className="custom-stat">
+            <span className="custom-stat-label">Annual Fees</span>
+            <span className="custom-stat-value" style={{ color: 'var(--gray-500)' }}>
+              {effectiveFee > 0 ? `−${fmt(effectiveFee)}` : '$0'}
+            </span>
+          </div>
+          <div className="custom-stat">
+            <span className="custom-stat-label">Net / Year</span>
+            <span className="custom-stat-value" style={{ color: netPerYear >= 0 ? 'var(--color-success)' : '#dc2626' }}>
+              {fmt(netPerYear)}
+            </span>
+          </div>
+          {wb > 0 && (
+            <div className="custom-stat">
+              <span className="custom-stat-label">Welcome Bonus</span>
+              <span className="custom-stat-value" style={{ color: '#6366f1' }}>{fmt(wb)}</span>
+            </div>
+          )}
+          {vsCurrentNet !== null && (
+            <div className="custom-stat custom-stat-vs">
+              <span className="custom-stat-label">vs Your Current Wallet</span>
+              <span className="custom-stat-value" style={{ color: vsCurrentNet >= 0 ? 'var(--color-success)' : '#dc2626', fontWeight: 700 }}>
+                {vsCurrentNet >= 0 ? '+' : ''}{fmt(vsCurrentNet)}/yr
+              </span>
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="custom-empty">Select cards above to see live estimates</div>
+      )}
     </div>
   );
 }
@@ -1359,7 +1197,13 @@ function WalletResults({ local, onRestart, onGoToStep }) {
   const freeWallet = WALLET_TIERS.find(t => t.id === 'free');
   const [expandedTier, setExpandedTier] = useState(null);
 
-  const tiers = WALLET_TIERS.map(tier => {
+  // Prepend "Your Current Wallet" if user has cards
+  const currentWalletDef = ownedCards.length > 0
+    ? { id: 'current', name: 'Your Current Wallet', description: 'Your cards, optimally routed', cards: ownedCards }
+    : null;
+  const tierDefs = currentWalletDef ? [currentWalletDef, ...WALLET_TIERS] : WALLET_TIERS;
+
+  const tiers = tierDefs.map(tier => {
     const earnings = calculateWalletEarnings(tier.cards, spend, activationStatus, redeemStyle);
     const totalFee = tier.cards.reduce((s, id) => {
       const card = CARDS.find(c => c.id === id);
@@ -1368,9 +1212,10 @@ function WalletResults({ local, onRestart, onGoToStep }) {
     const effectiveFee = tier.cards.reduce((s, id) => s + calculateEffectiveFee(id, selectedCredits), 0);
     const netPerYear = earnings - effectiveFee;
 
-    // Welcome bonus — skip cards in heldCards
+    // Welcome bonus — skip cards the user already owns or has previously held
     let wb = 0;
     for (const cardId of tier.cards) {
+      if (ownedCards.includes(cardId)) continue;
       if (heldCards.includes(cardId)) continue;
       const card = CARDS.find(c => c.id === cardId);
       if (!card?.welcomeBonus) continue;
@@ -1386,16 +1231,24 @@ function WalletResults({ local, onRestart, onGoToStep }) {
       }
     }
 
+    // Current wallet has no welcome bonus (already own the cards)
+    if (tier.id === 'current') wb = 0;
+
     const year1 = netPerYear + wb;
-    const breakeven = tier.id !== 'free'
+    const breakeven = (tier.id !== 'free' && tier.id !== 'current')
       ? calculateBreakeven(freeWallet.cards, tier.cards, spend, selectedCredits, heldCards, redeemStyle)
       : null;
 
     return { ...tier, earnings, totalFee, effectiveFee, netPerYear, year1, welcomeBonus: wb, breakeven };
   });
 
-  const bestTier = [...tiers].sort((a, b) => b.netPerYear - a.netPerYear)[0];
+  const currentTier = tiers.find(t => t.id === 'current') || null;
   const totalMonthlySpend = Object.values(spend).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+
+  // Best tier = same 3-year formula as RecommendationBanner
+  const bestTier = [...tiers]
+    .filter(t => t.id !== 'current' && t.id !== 'free')
+    .sort((a, b) => (b.year1 + b.netPerYear * 2) - (a.year1 + a.netPerYear * 2))[0] || tiers[0];
 
   // Returns feasibility info for a single card's welcome bonus
   function getBonusFeasibility(card) {
@@ -1437,188 +1290,269 @@ function WalletResults({ local, onRestart, onGoToStep }) {
         ))}
       </div>
 
-      {/* Recommendation banner */}
-      <RecommendationBanner tiers={tiers} ownedCards={ownedCards} totalMonthlySpend={totalMonthlySpend} spend={spend} redeemStyle={redeemStyle} />
+      {/* 1. Recommendation — quick answer at the top */}
+      <RecommendationBanner tiers={tiers} ownedCards={ownedCards} heldCards={heldCards} totalMonthlySpend={totalMonthlySpend} spend={spend} redeemStyle={redeemStyle} />
 
-      {/* Wallet tiers */}
-      <div style={{ marginBottom: 36 }}>
-        <h3 style={{ fontSize: 16, fontWeight: 700, color: 'var(--gray-700)', marginBottom: 14 }}>Wallet Tiers</h3>
+      {/* 2. Compare tool — most actionable view, above tier cards */}
+      <TierComparison
+        tiers={tiers}
+        defaultA={currentTier ? 'current' : 'free'}
+        defaultB={bestTier?.id}
+        totalMonthlySpend={totalMonthlySpend}
+        ownedCards={ownedCards}
+        heldCards={heldCards}
+        redeemStyle={redeemStyle}
+      />
+
+      {/* 3. Tier cards — detailed breakdown */}
+      <div className="results-section">
+        <h3 className="results-section-title">Wallet Options</h3>
         <div className="wallet-tiers">
-          {tiers.map((tier, i) => {
-            const isBest = tier.id === bestTier.id;
+          {tiers.map(tier => {
+            const isCurrent = tier.id === 'current';
+            const isBest = tier.id === bestTier?.id;
             const isExpanded = expandedTier === tier.id;
+            // Chart baseline: prefer current wallet, fall back to free
+            const chartBaseCards = currentTier ? currentTier.cards : freeWallet.cards;
+            const chartBaseName  = currentTier ? 'Your Current Wallet' : 'Free Wallet';
+
+            const vsCurrentDelta = currentTier && !isCurrent ? tier.netPerYear - currentTier.netPerYear : null;
+            const newCardIds = tier.cards.filter(cid => !ownedCards.includes(cid) && !heldCards.includes(cid));
+
             return (
-              <div key={tier.id} className={`wallet-tier ${isBest ? 'best' : ''} ${isExpanded ? 'expanded' : ''}`}>
-                <div className="wallet-tier-top"
-                  style={{ cursor: 'pointer' }}
-                  onClick={() => setExpandedTier(isExpanded ? null : tier.id)}>
-                  <div className="wallet-tier-label">
-                    <div className="tier-name">
+              <div key={tier.id} className={`wallet-tier ${isCurrent ? 'tier-current' : ''} ${isBest ? 'best' : ''} ${isExpanded ? 'expanded' : ''}`}>
+
+                {/* ── Collapsed header (always visible) ── */}
+                <div className="wt-header" onClick={() => setExpandedTier(isExpanded ? null : tier.id)}>
+                  <div className="wt-left">
+                    <div className="wt-name">
                       {tier.name}
-                      {isBest && <span className="badge-best">BEST</span>}
+                      {isCurrent && <span className="badge-current">CURRENT</span>}
+                      {!isCurrent && isBest && <span className="badge-best">BEST</span>}
                     </div>
-                    <div className="tier-desc">{tier.description}</div>
+                    <div className="wt-pills">
+                      {tier.cards.map(cid => {
+                        const card = CARDS.find(c => c.id === cid);
+                        const owns = ownedCards.includes(cid);
+                        return card ? (
+                          <span key={cid} className={`wt-pill ${owns ? 'wt-pill-own' : 'wt-pill-new'}`}>
+                            {card.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '')}
+                          </span>
+                        ) : null;
+                      })}
+                    </div>
                   </div>
-                  <div className="wallet-tier-cards">
-                    {tier.cards.map(cid => {
-                      const card = CARDS.find(c => c.id === cid);
-                      const owns = ownedCards.includes(cid);
-                      return card ? (
-                        <span key={cid} className={`wallet-card-pill ${owns ? 'owned' : 'new-card'}`}>
-                          {owns ? '✓ ' : '+ '}
-                          {card.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '')}
-                        </span>
-                      ) : null;
-                    })}
-                  </div>
-                  <span style={{ fontSize: 13, color: 'var(--gray-400)', flexShrink: 0, marginLeft: 8 }}>
-                    {isExpanded ? '▲' : '▼'}
-                  </span>
-                </div>
-                <div className="wallet-tier-stats">
-                  <div className="tier-stat">
-                    <div className="tier-stat-label">Annual Earnings</div>
-                    <div className={`tier-stat-value ${tier.earnings > 0 ? 'positive' : ''}`}>{fmt(tier.earnings)}</div>
-                  </div>
-                  <div className="tier-stat">
-                    <div className="tier-stat-label">Eff. Fee</div>
-                    <div className="tier-stat-value muted">{tier.effectiveFee > 0 ? `−${fmt(tier.effectiveFee)}` : '$0'}</div>
-                  </div>
-                  <div className="tier-stat">
-                    <div className="tier-stat-label">Net / Year</div>
-                    <div className={`tier-stat-value ${tier.netPerYear >= 0 ? 'positive' : 'negative'}`}>{fmt(tier.netPerYear)}</div>
-                  </div>
-                  <div className="tier-stat">
-                    <div className="tier-stat-label">Welcome Bonus</div>
-                    <div className="tier-stat-value muted">{tier.welcomeBonus > 0 ? fmt(tier.welcomeBonus) : '—'}</div>
-                  </div>
-                  <div className="tier-stat">
-                    <div className="tier-stat-label">Year 1 Total</div>
-                    <div className={`tier-stat-value ${tier.year1 >= 0 ? 'positive' : 'negative'}`}>{fmt(tier.year1)}</div>
+                  <div className="wt-right">
+                    <div className="wt-kpi">
+                      <span className="wt-kpi-val">{fmt(tier.netPerYear)}</span>
+                      <span className="wt-kpi-label">net/yr</span>
+                    </div>
+                    {vsCurrentDelta !== null && (
+                      <div className={`wt-delta ${vsCurrentDelta >= 0 ? 'pos' : 'neg'}`}>
+                        {vsCurrentDelta >= 0 ? '+' : ''}{fmt(vsCurrentDelta)}/yr vs yours
+                      </div>
+                    )}
+                    {isCurrent && (
+                      <div className="wt-delta pos">your baseline</div>
+                    )}
+                    <span className="wt-chevron">{isExpanded ? '▲' : '▼'}</span>
                   </div>
                 </div>
-                {/* Bonus feasibility */}
-                {tier.cards.some(cid => {
-                  const card = CARDS.find(c => c.id === cid);
-                  return card?.welcomeBonus?.spend > 0 && !ownedCards.includes(cid);
-                }) && (
-                  <div className="bonus-feasibility">
-                    <div className="bonus-feasibility-title">Welcome Bonus Feasibility</div>
-                    {tier.cards.map(cid => {
-                      const card = CARDS.find(c => c.id === cid);
-                      if (!card?.welcomeBonus) return null;
-                      if (ownedCards.includes(cid)) return null;
-                      const f = getBonusFeasibility(card);
-                      if (!f) return null;
 
-                      const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
-                      const val = (style?.valuations[card.issuer] || 1.0) / 100;
-                      const wb = card.welcomeBonus;
-                      const bonusDisplay = wb.isCashbackMatch
-                        ? 'Cashback Match'
-                        : wb.type === 'cashback'
-                          ? fmt(wb.amount)
-                          : fmt(wb.amount * val);
+                {/* ── Expanded detail ── */}
+                {isExpanded && (
+                  <div className="wt-body">
 
-                      const badgeLabels = { easy: 'Easy', stretch: 'Stretch', hard: 'Hard to reach', held: 'Already held', match: 'Year 1 match' };
-
-                      const effectiveFee = calculateEffectiveFee(cid, selectedCredits);
-
-                      return (
-                        <div key={cid} className="bonus-row">
-                          <div className="bonus-row-top">
-                            <span className="bonus-card-name">{card.name}</span>
-                            <span className="bonus-amount">{bonusDisplay} bonus</span>
-                            <span className={`bonus-badge ${f.tier}`}>{badgeLabels[f.tier]}</span>
-                          </div>
-                          <div className="bonus-fee-line">
-                            <span className="bonus-fee-label">Annual fee:</span>
-                            {card.annualFee === 0 ? (
-                              <span className="bonus-fee-value free">No annual fee</span>
-                            ) : effectiveFee < card.annualFee ? (
-                              <>
-                                <span className="bonus-fee-value strikethrough">${card.annualFee}</span>
-                                <span className="bonus-fee-value effective">${effectiveFee} after credits</span>
-                              </>
-                            ) : (
-                              <span className="bonus-fee-value">${card.annualFee}/yr</span>
+                    {/* Earnings breakdown */}
+                    <div className="wt-breakdown">
+                      {/* Per-category earnings rows */}
+                      {(() => {
+                        const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+                        return CATEGORIES.map(cat => {
+                          const monthly = parseFloat(spend[cat.id]) || 0;
+                          if (!monthly) return null;
+                          // Find best card in this tier for this category
+                          let bestCard = null, bestRate = 0;
+                          for (const cid of tier.cards) {
+                            const card = CARDS.find(c => c.id === cid);
+                            if (!card) continue;
+                            const r = getEffectiveRate(card, cat.id, activationStatus, monthly);
+                            if (r > bestRate) { bestRate = r; bestCard = card; }
+                          }
+                          if (!bestCard) return null;
+                          const val = (style?.valuations[bestCard.issuer] || 1.0) / 100;
+                          const annual = monthly * 12 * bestRate * val;
+                          const shortName = bestCard.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '');
+                          return (
+                            <div key={cat.id} className="wt-breakdown-row wt-breakdown-cat">
+                              <span className="wt-breakdown-cat-label">
+                                {cat.icon} {cat.label}
+                                <span className="wt-breakdown-cat-detail">
+                                  {fmt(monthly)}/mo × {bestRate}x ({shortName}) × {(val * 100).toFixed(1)}¢/pt × 12
+                                </span>
+                              </span>
+                              <span>{fmt(annual)}</span>
+                            </div>
+                          );
+                        }).filter(Boolean);
+                      })()}
+                      <div className="wt-breakdown-row wt-breakdown-subtotal">
+                        <span>Total earnings</span><span>{fmt(tier.earnings)}</span>
+                      </div>
+                      {/* Per-card fee breakdown */}
+                      {tier.cards.map(cid => {
+                        const card = CARDS.find(c => c.id === cid);
+                        if (!card || card.annualFee === 0) return null;
+                        const cardCredits = STATEMENT_CREDITS[cid] || [];
+                        const chosenCredits = cardCredits.filter(cr =>
+                          (selectedCredits[cid] || []).includes(cr.id)
+                        );
+                        const creditSum = chosenCredits.reduce((s, cr) => s + cr.value, 0);
+                        const effective = Math.max(0, card.annualFee - creditSum);
+                        const shortName = card.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '');
+                        return (
+                          <div key={cid} className="wt-breakdown-fee-card">
+                            <div className="wt-breakdown-row wt-breakdown-cat">
+                              <span>{shortName}</span>
+                              <span>−${card.annualFee}</span>
+                            </div>
+                            {chosenCredits.map(cr => (
+                              <div key={cr.id} className="wt-breakdown-row wt-breakdown-credit">
+                                <span>+ {cr.label}</span>
+                                <span>+${cr.value}</span>
+                              </div>
+                            ))}
+                            {creditSum > 0 && (
+                              <div className="wt-breakdown-row wt-breakdown-cat" style={{ fontWeight: 600 }}>
+                                <span>Effective fee</span>
+                                <span>−${effective}</span>
+                              </div>
                             )}
                           </div>
-                          {f.tier !== 'held' && f.tier !== 'match' && (
-                            <div className="bonus-progress-wrap">
-                              <div className="bonus-spend-requirement">
-                                <span className="bonus-spend-req-label">Spend requirement:</span>
-                                <span className="bonus-spend-req-value">{fmt(f.required)} in {f.window} mo</span>
-                                <span className="bonus-spend-req-rate">
-                                  ({fmt(Math.ceil(f.required / f.window))}/mo needed · you spend {fmt(totalMonthlySpend)}/mo)
+                        );
+                      })}
+                      <div className="wt-breakdown-row muted">
+                        <span>Total fees after credits</span>
+                        <span>{tier.effectiveFee > 0 ? `−${fmt(tier.effectiveFee)}` : '$0'}</span>
+                      </div>
+                      <div className="wt-breakdown-row total">
+                        <span>Net / year</span><span>{fmt(tier.netPerYear)}</span>
+                      </div>
+                      {tier.netPerYear < 0 && (
+                        <div className="wt-breakdown-negative-note">
+                          Fees outweigh rewards at your current spend level — you'd pay more than you earn back.
+                        </div>
+                      )}
+                      {!isCurrent && tier.welcomeBonus > 0 && (
+                        <div className="wt-breakdown-row accent">
+                          <span>+ Welcome bonus</span><span>{fmt(tier.welcomeBonus)}</span>
+                        </div>
+                      )}
+                      {!isCurrent && tier.welcomeBonus > 0 && (
+                        <div className="wt-breakdown-row total accent">
+                          <span>Year 1 total</span><span>{fmt(tier.year1)}</span>
+                        </div>
+                      )}
+                    </div>
+
+                    {/* New card applications */}
+                    {newCardIds.length > 0 && (
+                      <div className="wt-new-cards">
+                        <div className="wt-section-label">New applications needed</div>
+                        {newCardIds.map(cid => {
+                          const card = CARDS.find(c => c.id === cid);
+                          if (!card) return null;
+                          const f = getBonusFeasibility(card);
+                          const rdStyle = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+                          const raw = formatRawBonus(card);
+                          const wb = card.welcomeBonus;
+                          const dollarVal = !wb?.amount ? 0
+                            : wb.type === 'cashback' ? wb.amount
+                            : Math.round(wb.amount * ((rdStyle?.valuations[card.issuer] || 1.0) / 100));
+                          const effFee = calculateEffectiveFee(cid, selectedCredits);
+                          const feasLabel = { easy: 'Achievable', stretch: 'Stretch', hard: 'Difficult', match: 'Year 1 match', held: 'Already held' };
+                          const monthlyNeeded = wb?.spend > 0 ? Math.ceil(wb.spend / wb.months) : 0;
+                          const shortfall = monthlyNeeded > 0 ? Math.max(0, monthlyNeeded - totalMonthlySpend) : 0;
+                          return (
+                            <div key={cid} className="wt-card-row">
+                              <div className="wt-card-row-top">
+                                <span className="wt-card-row-name">{card.name}</span>
+                                <span className="wt-card-row-fee">
+                                  {effFee === 0 ? 'No annual fee'
+                                    : effFee < card.annualFee ? `$${effFee}/yr after credits`
+                                    : `$${card.annualFee}/yr`}
                                 </span>
                               </div>
-                              <div className="bonus-progress-bar">
-                                <div className={`bonus-progress-fill ${f.tier}`} style={{ width: `${f.pct}%` }} />
-                              </div>
-                              <span className="bonus-progress-label">
-                                {f.tier === 'easy'
-                                  ? `✓ On track — you'll hit it in ~${Math.ceil(f.monthsNeeded)} mo at your current spend`
-                                  : `At ${fmt(totalMonthlySpend)}/mo you'd need ${Math.ceil(f.monthsNeeded).toFixed(0)} mo — ${f.window} mo window`}
-                              </span>
+                              {raw && dollarVal > 0 && (
+                                <div className="wt-card-row-bonus">
+                                  <span className="wt-bonus-raw">{raw}</span>
+                                  <span className="wt-bonus-dol">≈ {fmt(dollarVal)}</span>
+                                  {f && <span className={`wt-bonus-badge wt-bonus-${f.tier}`}>{feasLabel[f.tier]}</span>}
+                                </div>
+                              )}
+                              {f && wb?.spend > 0 && f.tier !== 'held' && f.tier !== 'match' && (
+                                <div className="wt-card-row-spend">
+                                  Spend {fmt(wb.spend)} in {wb.months}mo
+                                  {shortfall > 0
+                                    ? <> — needs <strong>{fmt(shortfall)}/mo more</strong> than your current total</>
+                                    : <> — <strong>your {fmt(totalMonthlySpend)}/mo covers it</strong></>}
+                                </div>
+                              )}
                             </div>
-                          )}
-                          {f.tier === 'match' && (
-                            <div className="bonus-progress-label" style={{ textAlign: 'left', color: 'var(--color-primary)' }}>
-                              All cashback earned in year 1 is doubled at year-end
-                            </div>
-                          )}
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Breakeven */}
+                    {!isCurrent && tier.id !== 'free' && (
+                      <div className={`wt-breakeven ${tier.breakeven ? 'ok' : 'never'}`}>
+                        {tier.breakeven
+                          ? `Pays for itself vs free wallet by month ${tier.breakeven}`
+                          : "Doesn't break even vs free wallet within 5 years at this spend level"}
+                      </div>
+                    )}
+
+                    {/* Chart */}
+                    {!isCurrent && tier.id !== 'free' && (() => {
+                      const chartData = generateCumulativeData(
+                        chartBaseCards, tier.cards, spend, selectedCredits, heldCards, redeemStyle
+                      );
+                      return (
+                        <div className="tier-chart">
+                          <div className="tier-chart-title">Annual net vs. {chartBaseName}</div>
+                          <NetAdvantageChart
+                            freeData={chartData.free}
+                            tierData={chartData.tier}
+                            tierName={tier.name}
+                            welcomeBonus={tier.welcomeBonus}
+                          />
                         </div>
                       );
-                    })}
+                    })()}
                   </div>
                 )}
-
-                {tier.breakeven !== null && (
-                  <div className={`breakeven-badge ${tier.breakeven === null ? 'never' : ''}`}>
-                    {tier.breakeven ? `✓ Pays for itself in month ${tier.breakeven}` : '✓ Immediately profitable'}
-                  </div>
-                )}
-                {tier.id !== 'free' && tier.breakeven === null && (
-                  <div className="breakeven-badge never">Doesn't break even within 5 years at this spend level</div>
-                )}
-
-                {/* 5-year chart (expanded) */}
-                {isExpanded && (() => {
-                  const chartData = generateCumulativeData(
-                    freeWallet.cards, tier.cards, spend, selectedCredits, heldCards, redeemStyle
-                  );
-                  return (
-                    <div className="tier-chart">
-                      <div className="tier-chart-title">Net Advantage vs. Free Wallet by Year</div>
-                      <NetAdvantageChart
-                        freeData={chartData.free}
-                        tierData={chartData.tier}
-                        tierName={tier.name}
-                        welcomeBonus={tier.welcomeBonus}
-                      />
-                      <div className="tier-chart-footer">
-                        {chartData.breakeven
-                          ? `${tier.name} surpasses the Free Wallet in month ${chartData.breakeven} (~${(chartData.breakeven / 12).toFixed(1)} years).`
-                          : `At your current spend of ${fmt(Object.values(spend).reduce((s,v) => s+(parseFloat(v)||0),0))}/mo, ${tier.name} doesn't surpass the Free Wallet within 5 years.`}
-                      </div>
-                    </div>
-                  );
-                })()}
               </div>
             );
           })}
         </div>
       </div>
 
-      {/* Side-by-side comparison */}
-      <TierComparison tiers={tiers} />
+      {/* 4. Custom combo builder */}
+      <CustomComboBuilder
+        spend={spend}
+        selectedCredits={selectedCredits}
+        redeemStyle={redeemStyle}
+        heldCards={heldCards}
+        activationStatus={activationStatus}
+        currentTier={currentTier}
+      />
 
-      {/* Best card per category */}
+      {/* 5. Optimize current — best card per category */}
       {ownedCards.length > 0 && (
         <div className="best-card-section">
           <h3 className="best-card-title">Optimize Your Current Wallet</h3>
-          <p className="best-card-subtitle">Best card to use for each category, given the cards you own.</p>
+          <p className="best-card-subtitle">Best card to use for each spend category right now.</p>
           <div className="best-card-table">
             {CATEGORIES.filter(cat => parseFloat(spend[cat.id]) > 0).map(cat => {
               const monthly = parseFloat(spend[cat.id]) || 0;
@@ -1627,8 +1561,8 @@ function WalletResults({ local, onRestart, onGoToStep }) {
                 const card = CARDS.find(c => c.id === cid);
                 if (!card) continue;
                 const rate = getEffectiveRate(card, cat.id, activationStatus, monthly);
-                const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
-                const val = (style?.valuations[card.issuer] || 1.0) / 100;
+                const rdStyle = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+                const val = (rdStyle?.valuations[card.issuer] || 1.0) / 100;
                 if (rate * val > bestRate * bestVal) { bestCard = card; bestRate = rate; bestVal = val; }
               }
               if (!bestCard) return null;
@@ -1772,9 +1706,7 @@ export default function WalletOptimizer() {
       <div className="step-card">
         {step === 0 && <StepSpend {...stepProps} />}
         {step === 1 && <StepCards {...stepProps} />}
-        {step === 2 && <StepEligibility {...stepProps} />}
-        {step === 3 && <StepCredits {...stepProps} />}
-        {step === 4 && <StepRedemption {...stepProps} />}
+        {step === 2 && <StepPreferences {...stepProps} />}
       </div>
     </div>
   );

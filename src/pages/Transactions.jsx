@@ -135,6 +135,11 @@ export default function Transactions() {
       spend[cat] = selectedCategories.has(cat) ? String(Math.round(avg)) : '';
     }
     dispatch({ type: 'SET_SPEND', payload: spend });
+    // Also write directly to localStorage so WalletOptimizer's loadFromStorage picks it up
+    try {
+      const saved = JSON.parse(localStorage.getItem('pointsmax_wallet') || '{}');
+      localStorage.setItem('pointsmax_wallet', JSON.stringify({ ...saved, spend }));
+    } catch {}
     navigate('/wallet');
   };
 
