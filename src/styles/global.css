@@ -1590,6 +1590,216 @@ input, select { font-family: var(--font); }
 .toggle-switch input:checked + .toggle-slider { background: var(--teal); }
 .toggle-switch input:checked + .toggle-slider::before { transform: translateX(18px); }
 
+/* Earn Analyzer — category list + entry rows */
+.earn-cat-list { display: flex; flex-direction: column; gap: 12px; }
+
+.earn-cat-row {
+  border: 1.5px solid var(--gray-200);
+  border-radius: 12px;
+  overflow: hidden;
+}
+
+.earn-cat-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  background: var(--gray-50);
+  border-bottom: 1px solid var(--gray-200);
+}
+
+.earn-cat-name {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--gray-900);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.earn-cat-total {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-500);
+}
+
+.earn-cat-entries { display: flex; flex-direction: column; }
+
+.earn-entry-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 16px;
+  gap: 12px;
+  border-bottom: 1px solid var(--gray-100);
+  transition: background 0.1s;
+}
+.earn-entry-row:last-child { border-bottom: none; }
+.earn-entry-row.optimal { background: #f0fdf8; }
+.earn-entry-row.suboptimal { background: #fffbeb; }
+
+.earn-entry-left {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.earn-entry-card {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--gray-900);
+  white-space: nowrap;
+}
+
+.earn-entry-warn {
+  font-size: 11px;
+  font-weight: 600;
+  color: #92400e;
+  background: #fef3c7;
+  padding: 2px 7px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.earn-entry-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.earn-entry-amount {
+  font-size: 13px;
+  color: var(--gray-500);
+}
+
+.earn-entry-rate {
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--gray-700);
+  background: var(--gray-100);
+  padding: 2px 8px;
+  border-radius: 5px;
+}
+
+.earn-entry-earnings {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--teal);
+}
+
+.earn-entry-gap {
+  font-size: 12px;
+  color: #92400e;
+  background: #fef3c7;
+  padding: 2px 8px;
+  border-radius: 5px;
+  font-weight: 500;
+}
+
+.earn-entry-optimal {
+  font-size: 13px;
+  color: var(--teal);
+  font-weight: 700;
+}
+
+/* Editable entry row */
+.earn-entry-row.editable {
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+  padding: 10px 16px;
+}
+
+.earn-entry-select {
+  flex: 1;
+  min-width: 140px;
+  padding: 6px 10px;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 8px;
+  font-size: 13px;
+  font-family: var(--font);
+  color: var(--gray-900);
+  background: white;
+  cursor: pointer;
+}
+.earn-entry-select:focus { outline: none; border-color: var(--purple); }
+
+.earn-entry-amount-wrap {
+  display: flex;
+  align-items: center;
+  border: 1.5px solid var(--gray-200);
+  border-radius: 8px;
+  overflow: hidden;
+  width: 100px;
+  background: white;
+}
+.earn-entry-amount-wrap:focus-within { border-color: var(--purple); }
+
+.earn-entry-dollar {
+  padding: 0 6px 0 10px;
+  font-size: 13px;
+  color: var(--gray-400);
+}
+
+.earn-entry-input {
+  border: none;
+  outline: none;
+  width: 60px;
+  padding: 6px 8px 6px 0;
+  font-size: 13px;
+  font-family: var(--font);
+  color: var(--gray-900);
+  -moz-appearance: textfield;
+}
+.earn-entry-input::-webkit-outer-spin-button,
+.earn-entry-input::-webkit-inner-spin-button { -webkit-appearance: none; }
+
+.earn-entry-rate.warn {
+  background: #fef3c7;
+  color: #92400e;
+  font-size: 12px;
+  padding: 2px 8px;
+  border-radius: 5px;
+}
+
+.earn-entry-remove {
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: var(--gray-100);
+  color: var(--gray-400);
+  font-size: 14px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s;
+}
+.earn-entry-remove:hover { background: var(--color-gap0-light); color: var(--color-gap0); }
+
+.earn-add-card {
+  display: block;
+  width: 100%;
+  padding: 9px 16px;
+  background: none;
+  border: none;
+  border-top: 1px solid var(--gray-100);
+  text-align: left;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-family: var(--font);
+  transition: background 0.1s;
+}
+.earn-add-card:hover { background: var(--color-primary-light); }
+
 /* Category spend table */
 .category-sections { display: flex; flex-direction: column; gap: 20px; }
 

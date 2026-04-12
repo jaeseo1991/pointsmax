@@ -6,7 +6,6 @@ import {
   getEffectiveRate,
   calculateGap0,
   calculateGap1,
-  calculateGap2,
   fmt,
 } from '../utils/calculations';
 import { analyzeTransactionsByCard, analyzeTransactions, projectSpend } from '../utils/plaidCategories';
@@ -157,13 +156,118 @@ function ActivationBanner({ card, activationStatus, categoryEntries, redeemStyle
   );
 }
 
+// ─── Shared entry badge ───────────────────────────────────────────────────────
+function EntryBadge({ card, catId, activationStatus, amount, rdStyle }) {
+  const rate = getEffectiveRate(card, catId, activationStatus, parseFloat(amount) || 0);
+  const val = (rdStyle?.valuations[card.issuer] || 1.0) / 100;
+  const earnings = (parseFloat(amount) || 0) * rate * val;
+  const isUnactivated =
+    card.rotating?.isRotating &&
+    card.rotating.currentQuarter?.categories.includes(catId) &&
+    !activationStatus[card.id];
+
+  if (isUnactivated) {
+    return <span className="earn-entry-rate warn">{Number.isInteger(rate) ? rate : rate.toFixed(1)}x ⚠ not activated</span>;
+  }
+  return (
+    <>
+      <span className="earn-entry-rate">{Number.isInteger(rate) ? rate : rate.toFixed(1)}x</span>
+      <span className="earn-entry-earnings">= {fmt(earnings)}/mo</span>
+    </>
+  );
+}
+
+// ─── Category row — manual / editable ────────────────────────────────────────
+function EditableCategoryRow({ cat, entries, ownedCards, activationStatus, redeemStyle, onChange }) {
+  const rdStyle = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+  const totalAssigned = entries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+
+  // Best owned card for this category (for gap hints)
+  let bestRate = 0, bestCardId = null;
+  for (const cid of ownedCards) {
+    const card = CARDS.find(c => c.id === cid);
+    if (!card) continue;
+    const r = getEffectiveRate(card, cat.id, activationStatus, totalAssigned);
+    if (r > bestRate) { bestRate = r; bestCardId = cid; }
+  }
+
+  const updateEntry = (i, field, value) => {
+    const next = entries.map((e, idx) => idx === i ? { ...e, [field]: value } : e);
+    onChange(next);
+  };
+  const removeEntry = (i) => onChange(entries.filter((_, idx) => idx !== i));
+  const addEntry = () => onChange([...entries, { cardId: ownedCards[0] || '', amount: '' }]);
+
+  return (
+    <div className="earn-cat-row">
+      <div className="earn-cat-header">
+        <span className="earn-cat-name">{CAT_ICONS[cat.id]} {cat.label}</span>
+        <span className="earn-cat-total">{totalAssigned > 0 ? `${fmt(totalAssigned)}/mo` : '—'}</span>
+      </div>
+
+      <div className="earn-cat-entries">
+        {entries.map((entry, i) => {
+          const card = CARDS.find(c => c.id === entry.cardId);
+          const amount = parseFloat(entry.amount) || 0;
+          const isOptimal = card && entry.cardId === bestCardId;
+          const bestCard = CARDS.find(c => c.id === bestCardId);
+          const bestVal = bestCard ? (rdStyle?.valuations[bestCard.issuer] || 1.0) / 100 : 0;
+          const cardVal = card ? (rdStyle?.valuations[card.issuer] || 1.0) / 100 : 0;
+          const cardRate = card ? getEffectiveRate(card, cat.id, activationStatus, amount) : 1;
+          const monthlyGap = (!isOptimal && amount > 0 && bestCard)
+            ? (amount * bestRate * bestVal) - (amount * cardRate * cardVal)
+            : 0;
+
+          return (
+            <div key={i} className={`earn-entry-row editable ${isOptimal ? 'optimal' : monthlyGap > 0.5 ? 'suboptimal' : ''}`}>
+              <select
+                className="earn-entry-select"
+                value={entry.cardId}
+                onChange={e => updateEntry(i, 'cardId', e.target.value)}
+              >
+                {ownedCards.map(cid => {
+                  const c = CARDS.find(x => x.id === cid);
+                  return c ? <option key={cid} value={cid}>{c.name.replace('Chase ', '').replace('American Express ', 'Amex ').replace('Capital One ', '')}</option> : null;
+                })}
+              </select>
+              <div className="earn-entry-amount-wrap">
+                <span className="earn-entry-dollar">$</span>
+                <input
+                  className="earn-entry-input"
+                  type="number"
+                  min="0"
+                  placeholder="0"
+                  value={entry.amount}
+                  onChange={e => updateEntry(i, 'amount', e.target.value)}
+                />
+              </div>
+              <div className="earn-entry-right">
+                {card && <EntryBadge card={card} catId={cat.id} activationStatus={activationStatus} amount={entry.amount} rdStyle={rdStyle} />}
+                {isOptimal && <span className="earn-entry-optimal">✓ best</span>}
+                {!isOptimal && monthlyGap > 0.5 && bestCard && (
+                  <span className="earn-entry-gap">+{fmt(monthlyGap)}/mo with {bestCard.name.split(' ').pop()}</span>
+                )}
+              </div>
+              {entries.length > 1 && (
+                <button className="earn-entry-remove" onClick={() => removeEntry(i)} title="Remove">✕</button>
+              )}
+            </div>
+          );
+        })}
+        {ownedCards.length > 0 && (
+          <button className="earn-add-card" onClick={addEntry}>+ Add card</button>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Category row (Plaid mode — read-only) ────────────────────────────────────
 function CategoryRow({ cat, entries, ownedCards, activationStatus, redeemStyle }) {
   const rdStyle = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
   const totalSpend = entries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
   if (!totalSpend) return null;
 
-  // Best owned card for this category
   let bestRate = 0, bestCardId = null;
   for (const cid of ownedCards) {
     const card = CARDS.find(c => c.id === cid);
@@ -178,7 +282,6 @@ function CategoryRow({ cat, entries, ownedCards, activationStatus, redeemStyle }
         <span className="earn-cat-name">{CAT_ICONS[cat.id]} {cat.label}</span>
         <span className="earn-cat-total">{fmt(totalSpend)}/mo</span>
       </div>
-
       <div className="earn-cat-entries">
         {entries.map((entry, i) => {
           const card = CARDS.find(c => c.id === entry.cardId);
@@ -188,14 +291,9 @@ function CategoryRow({ cat, entries, ownedCards, activationStatus, redeemStyle }
           const val = (rdStyle?.valuations[card.issuer] || 1.0) / 100;
           const monthlyEarnings = amount * rate * val;
           const isOptimal = entry.cardId === bestCardId;
-
-          // Gap: what best owned card would earn vs what this card earns
           const bestCard = CARDS.find(c => c.id === bestCardId);
           const bestVal = bestCard ? (rdStyle?.valuations[bestCard.issuer] || 1.0) / 100 : val;
-          const monthlyGap = !isOptimal
-            ? (amount * bestRate * bestVal) - monthlyEarnings
-            : 0;
-
+          const monthlyGap = !isOptimal ? (amount * bestRate * bestVal) - monthlyEarnings : 0;
           const isUnactivated =
             card.rotating?.isRotating &&
             card.rotating.currentQuarter?.categories.includes(cat.id) &&
@@ -207,15 +305,11 @@ function CategoryRow({ cat, entries, ownedCards, activationStatus, redeemStyle }
                 <span className="earn-entry-card">
                   {card.name.replace('Chase ', '').replace('American Express ', 'Amex ').replace('Capital One ', '')}
                 </span>
-                {isUnactivated && (
-                  <span className="earn-entry-warn">⚠ bonus not activated</span>
-                )}
+                {isUnactivated && <span className="earn-entry-warn">⚠ bonus not activated</span>}
               </div>
               <div className="earn-entry-right">
                 <span className="earn-entry-amount">{fmt(amount)}/mo</span>
-                <span className="earn-entry-rate">
-                  {Number.isInteger(rate) ? rate : rate.toFixed(1)}x
-                </span>
+                <span className="earn-entry-rate">{Number.isInteger(rate) ? rate : rate.toFixed(1)}x</span>
                 <span className="earn-entry-earnings">= {fmt(monthlyEarnings)}/mo</span>
                 {!isOptimal && monthlyGap > 0.5 && bestCard && (
                   <span className="earn-entry-gap">
@@ -344,7 +438,6 @@ export default function EarnAnalyzer() {
   // Gap calculations
   const gap0 = useMemo(() => calculateGap0(categoryEntries, activationStatus, redeemStyle), [categoryEntries, activationStatus, redeemStyle]);
   const gap1 = useMemo(() => calculateGap1(categoryEntries, ownedCards, activationStatus, redeemStyle), [categoryEntries, ownedCards, activationStatus, redeemStyle]);
-  const gap2 = useMemo(() => calculateGap2(categoryEntries, ownedCards, activationStatus, redeemStyle), [categoryEntries, ownedCards, activationStatus, redeemStyle]);
 
   // Per-category breakdown for results table
   const catBreakdown = useMemo(() => {
@@ -399,7 +492,7 @@ export default function EarnAnalyzer() {
     const rdStyle = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
     const cardNames = ownedCards.map(id => CARDS.find(c => c.id === id)?.name).filter(Boolean).join(', ');
     const spendSummary = catBreakdown.map(r => `${r.cat.label}: ${fmt(r.totalSpend)}/mo`).join(', ');
-    const prompt = `You are a credit card rewards expert. Cards: ${cardNames || 'none'}. Monthly spend: ${spendSummary || 'not set'}. Redemption: ${rdStyle?.label}. Monthly gaps — unactivated bonuses: ${fmt(gap0)}, wrong routing: ${fmt(gap1)}, better market cards: ${fmt(gap2)}. In 3-4 sentences, give the single most impactful actionable advice. Be specific. Don't repeat the numbers back.`;
+    const prompt = `You are a credit card rewards expert. Cards: ${cardNames || 'none'}. Monthly spend: ${spendSummary || 'not set'}. Redemption: ${rdStyle?.label}. Monthly gaps — unactivated bonuses: ${fmt(gap0)}, wrong card routing: ${fmt(gap1)}. In 3-4 sentences, give the single most impactful actionable advice. Be specific. Don't repeat the numbers back.`;
     try {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -542,15 +635,37 @@ export default function EarnAnalyzer() {
           <div className="earn-cat-list">
             {CATEGORIES.map(cat => {
               const entries = categoryEntries[cat.id] || [];
-              if (!entries.length || !entries.some(e => parseFloat(e.amount) > 0)) return null;
+              const hasData = entries.some(e => parseFloat(e.amount) > 0) || (parseFloat(effectiveSpend[cat.id]) || 0) > 0;
+              if (!hasData && isPlaidMode) return null;
+              if (isPlaidMode) {
+                if (!entries.length || !entries.some(e => parseFloat(e.amount) > 0)) return null;
+                return (
+                  <CategoryRow
+                    key={cat.id}
+                    cat={cat}
+                    entries={entries}
+                    ownedCards={ownedCards}
+                    activationStatus={activationStatus}
+                    redeemStyle={redeemStyle}
+                  />
+                );
+              }
+              // Manual mode: only show categories that have a spend budget
+              if (!(parseFloat(effectiveSpend[cat.id]) || 0)) return null;
+              const catEntries = entries.length > 0 ? entries : [{ cardId: ownedCards[0] || '', amount: effectiveSpend[cat.id] || '' }];
               return (
-                <CategoryRow
+                <EditableCategoryRow
                   key={cat.id}
                   cat={cat}
-                  entries={entries}
+                  entries={catEntries}
                   ownedCards={ownedCards}
                   activationStatus={activationStatus}
                   redeemStyle={redeemStyle}
+                  onChange={next => {
+                    const updated = { ...manualEntries, [cat.id]: next };
+                    setManualEntries(updated);
+                    dispatch({ type: 'SET_CATEGORY_ENTRIES', payload: updated });
+                  }}
                 />
               );
             })}
@@ -571,8 +686,6 @@ export default function EarnAnalyzer() {
                   desc: gap0 > 0 ? `${fmt(gap0 * 12)}/yr from rotating bonuses you haven't activated` : 'All rotating bonuses activated ✓' },
                 { cls: 'gap1', label: 'Gap 1', title: 'Wrong Card Routing', val: gap1,
                   desc: gap1 > 0 ? `${fmt(gap1 * 12)}/yr lost by using a lower-earning card` : 'Your routing is optimal ✓' },
-                { cls: 'gap2', label: 'Gap 2', title: 'Better Cards Exist', val: gap2,
-                  desc: gap2 > 0 ? `${fmt(gap2 * 12)}/yr available with better market cards` : "You're maximizing the market ✓" },
               ].map(g => (
                 <div key={g.cls} className={`gap-card ${g.cls}`}>
                   <div className="gap-number">{g.label}</div>
@@ -592,7 +705,7 @@ export default function EarnAnalyzer() {
               { label: 'Annual Earnings',   val: totalAnnualEarnings,                          cls: 'positive' },
               { label: 'Annual Fees',        val: -totalAnnualFees,                             cls: totalAnnualFees > 0 ? '' : 'positive' },
               { label: 'Net / Year',         val: totalAnnualEarnings - totalAnnualFees,        cls: totalAnnualEarnings >= totalAnnualFees ? 'positive' : 'negative' },
-              { label: 'Total Gap / Year',   val: (gap0 + gap1 + gap2) * 12,                   cls: 'negative' },
+              { label: 'Routing Gap / Year',  val: (gap0 + gap1) * 12,                          cls: 'negative' },
             ].map(s => (
               <div key={s.label} className="summary-stat">
                 <div className="summary-stat-label">{s.label}</div>
