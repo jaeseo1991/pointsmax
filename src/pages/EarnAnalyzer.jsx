@@ -7,69 +7,124 @@ import {
   calculateGap0,
   calculateGap1,
   calculateGap2,
-  calculateWalletEarnings,
-  calculateEffectiveFee,
   fmt,
 } from '../utils/calculations';
+import { analyzeTransactionsByCard, analyzeTransactions, projectSpend } from '../utils/plaidCategories';
 
-const CAT_ICONS = { dining:'🍽️', groceries:'🛒', travel:'✈️', gas:'⛽', shopping:'🛍️', subscriptions:'📱', entertainment:'🎬', other:'💳' };
+const API = 'http://localhost:3001';
+const MAPPING_KEY = 'pointsmax_account_map';
 
-// Flip an owned card
-function useOwnedCards() {
-  const { state, dispatch } = useApp();
-  const toggle = cardId => {
-    const next = state.ownedCards.includes(cardId)
-      ? state.ownedCards.filter(id => id !== cardId)
-      : [...state.ownedCards, cardId];
-    dispatch({ type: 'SET_OWNED_CARDS', payload: next });
-  };
-  return { ownedCards: state.ownedCards, toggle };
+const CAT_ICONS = {
+  dining:'🍽️', groceries:'🛒', travel:'✈️', gas:'⛽',
+  shopping:'🛍️', subscriptions:'📱', entertainment:'🎬', other:'💳',
+};
+
+// ─── Account name → card ID matching (same patterns as WalletOptimizer) ───────
+const CARD_NAME_PATTERNS = [
+  { id: 'csr',           keywords: ['sapphire reserve'] },
+  { id: 'csp',           keywords: ['sapphire preferred'] },
+  { id: 'cfu',           keywords: ['freedom unlimited'] },
+  { id: 'cf',            keywords: ['freedom flex', 'freedom'] },
+  { id: 'amex_plat',     keywords: ['platinum card', 'the platinum', 'amex platinum'] },
+  { id: 'amex_gold',     keywords: ['gold card', 'amex gold', 'american express gold'] },
+  { id: 'amex_bcp',      keywords: ['blue cash preferred', 'blue cash everyday'] },
+  { id: 'cdc',           keywords: ['double cash'] },
+  { id: 'wfac',          keywords: ['active cash'] },
+  { id: 'co_venture',    keywords: ['venture x', 'venture rewards', 'venture'] },
+  { id: 'discover',      keywords: ['discover it', 'discover'] },
+  { id: 'usb_cash_plus', keywords: ['cash+', 'cash plus'] },
+  { id: 'robinhood_gold',keywords: ['robinhood gold', 'robinhood'] },
+  { id: 'amazon_prime',  keywords: ['amazon prime', 'prime rewards', 'amazon rewards'] },
+  { id: 'apple_card',    keywords: ['apple card'] },
+  { id: 'bilt',          keywords: ['bilt'] },
+];
+
+function autoMatch(name = '', officialName = '') {
+  const h = `${name} ${officialName}`.toLowerCase();
+  for (const { id, keywords } of CARD_NAME_PATTERNS) {
+    if (keywords.some(kw => h.includes(kw))) return id;
+  }
+  return null;
 }
 
-// ─── Rate badge ───────────────────────────────────────────────────────────────
-function RateBadge({ card, category, activationStatus, monthlySpend, redeemStyle }) {
-  if (!card) return null;
-  const rate = getEffectiveRate(card, category, activationStatus, monthlySpend);
-  const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
-  const valCents = style?.valuations[card.issuer] || 1.0;
-  const pct = (rate * valCents).toFixed(1);
+// ─── Account Matcher ──────────────────────────────────────────────────────────
+function AccountMatcher({ accounts, initialMapping, onSave }) {
+  const [mapping, setMapping] = useState(() => {
+    const m = { ...initialMapping };
+    for (const acc of accounts) {
+      if (m[acc.account_id] === undefined) {
+        m[acc.account_id] = autoMatch(acc.name, acc.official_name) || '';
+      }
+    }
+    return m;
+  });
 
-  const isRotatingUnactivated =
-    card.rotating?.isRotating &&
-    card.rotating.currentQuarter?.categories.includes(category) &&
-    !activationStatus[card.id];
-
-  if (isRotatingUnactivated) {
-    return <span className="rate-badge bad">{card.name.split(' ').pop()} — 1x ✗ Not activated</span>;
-  }
-
-  const isHighlight = rate >= 3;
   return (
-    <span className={`rate-badge ${isHighlight ? 'good' : 'warn'}`}>
-      {card.name.split(' ').pop()} — {rate % 1 === 0 ? rate : rate.toFixed(1)}x @ {valCents}¢ = {pct}%
-    </span>
+    <div className="earn-section">
+      <div className="earn-section-title">Link your credit cards</div>
+      <div className="earn-section-sub">
+        We found {accounts.length} credit card account{accounts.length !== 1 ? 's' : ''} from your bank.
+        Match each to a card so we can track exactly what you're earning per card.
+      </div>
+
+      <div className="account-matcher-list">
+        {accounts.map(acc => {
+          const matched = mapping[acc.account_id];
+          const wasAutoMatched = autoMatch(acc.name, acc.official_name) === matched && !!matched;
+          return (
+            <div key={acc.account_id} className="account-matcher-row">
+              <div className="account-matcher-bank">
+                <div className="account-matcher-name">{acc.name}</div>
+                {acc.mask && <div className="account-matcher-mask">···{acc.mask}</div>}
+              </div>
+              <span className="account-matcher-arrow">→</span>
+              <div className="account-matcher-select-wrap">
+                <select
+                  className="account-matcher-select"
+                  value={matched || ''}
+                  onChange={e => setMapping(prev => ({ ...prev, [acc.account_id]: e.target.value }))}
+                >
+                  <option value="">Select card…</option>
+                  <option value="__skip__">Not in my list (skip)</option>
+                  {CARDS.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+                {wasAutoMatched && <span className="account-matcher-auto">✓ auto-matched</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      <button
+        className="btn btn-primary"
+        style={{ marginTop: 20 }}
+        onClick={() => onSave(mapping)}
+      >
+        Save & Analyze →
+      </button>
+    </div>
   );
 }
 
-// ─── Activation banner for one rotating card ─────────────────────────────────
-function ActivationBanner({ card, activationStatus, spend, redeemStyle, onToggle }) {
+// ─── Activation banner ────────────────────────────────────────────────────────
+function ActivationBanner({ card, activationStatus, categoryEntries, redeemStyle, onToggle }) {
   const { currentQuarter } = card.rotating;
   const isOn = !!activationStatus[card.id];
+  const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+  const val = (style?.valuations[card.issuer] || 1.0) / 100;
+  const monthlyCap = currentQuarter.cap / 3;
 
-  // Impact calculation: monthly gain from activating
-  const monthlyImpact = useMemo(() => {
-    let gain = 0;
-    for (const cat of currentQuarter.categories) {
-      const monthly = parseFloat(spend[cat]) || 0;
-      if (!monthly) continue;
-      const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
-      const val = (style?.valuations[card.issuer] || 1.0) / 100;
-      const monthlyCap = currentQuarter.cap / 3;
-      const effectiveSpend = Math.min(monthly, monthlyCap);
-      gain += effectiveSpend * (currentQuarter.multiplier - 1) * val;
+  // Sum spend on this card across rotating categories
+  let totalOnCard = 0;
+  for (const cat of currentQuarter.categories) {
+    const entries = categoryEntries[cat] || [];
+    for (const e of entries) {
+      if (e.cardId === card.id) totalOnCard += parseFloat(e.amount) || 0;
     }
-    return gain;
-  }, [card, currentQuarter, spend, redeemStyle]);
+  }
+
+  const effectiveSpend = Math.min(totalOnCard, monthlyCap);
+  const monthlyImpact = effectiveSpend * (currentQuarter.multiplier - 1) * val;
 
   return (
     <div className={`activation-banner ${isOn ? 'activated' : ''}`}>
@@ -85,9 +140,9 @@ function ActivationBanner({ card, activationStatus, spend, redeemStyle, onToggle
         </div>
         <div className={`activation-impact ${!isOn && monthlyImpact > 0 ? 'warn' : ''}`}>
           {isOn
-            ? `✓ Activated — earning up to ${fmt(monthlyImpact)}/mo extra`
+            ? monthlyImpact > 0 ? `✓ Activated — earning ${fmt(monthlyImpact)}/mo extra` : '✓ Activated'
             : monthlyImpact > 0
-              ? `⚠ Not activated — you're missing ${fmt(monthlyImpact)}/mo`
+              ? `⚠ Not activated — missing ${fmt(monthlyImpact)}/mo`
               : 'Activate to earn 5x on qualifying categories'}
         </div>
       </div>
@@ -102,91 +157,202 @@ function ActivationBanner({ card, activationStatus, spend, redeemStyle, onToggle
   );
 }
 
+// ─── Category row (Plaid mode — read-only) ────────────────────────────────────
+function CategoryRow({ cat, entries, ownedCards, activationStatus, redeemStyle }) {
+  const rdStyle = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+  const totalSpend = entries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
+  if (!totalSpend) return null;
+
+  // Best owned card for this category
+  let bestRate = 0, bestCardId = null;
+  for (const cid of ownedCards) {
+    const card = CARDS.find(c => c.id === cid);
+    if (!card) continue;
+    const r = getEffectiveRate(card, cat.id, activationStatus, totalSpend);
+    if (r > bestRate) { bestRate = r; bestCardId = cid; }
+  }
+
+  return (
+    <div className="earn-cat-row">
+      <div className="earn-cat-header">
+        <span className="earn-cat-name">{CAT_ICONS[cat.id]} {cat.label}</span>
+        <span className="earn-cat-total">{fmt(totalSpend)}/mo</span>
+      </div>
+
+      <div className="earn-cat-entries">
+        {entries.map((entry, i) => {
+          const card = CARDS.find(c => c.id === entry.cardId);
+          if (!card) return null;
+          const amount = parseFloat(entry.amount) || 0;
+          const rate = getEffectiveRate(card, cat.id, activationStatus, amount);
+          const val = (rdStyle?.valuations[card.issuer] || 1.0) / 100;
+          const monthlyEarnings = amount * rate * val;
+          const isOptimal = entry.cardId === bestCardId;
+
+          // Gap: what best owned card would earn vs what this card earns
+          const bestCard = CARDS.find(c => c.id === bestCardId);
+          const bestVal = bestCard ? (rdStyle?.valuations[bestCard.issuer] || 1.0) / 100 : val;
+          const monthlyGap = !isOptimal
+            ? (amount * bestRate * bestVal) - monthlyEarnings
+            : 0;
+
+          const isUnactivated =
+            card.rotating?.isRotating &&
+            card.rotating.currentQuarter?.categories.includes(cat.id) &&
+            !activationStatus[card.id];
+
+          return (
+            <div key={i} className={`earn-entry-row ${isOptimal ? 'optimal' : monthlyGap > 0.5 ? 'suboptimal' : ''}`}>
+              <div className="earn-entry-left">
+                <span className="earn-entry-card">
+                  {card.name.replace('Chase ', '').replace('American Express ', 'Amex ').replace('Capital One ', '')}
+                </span>
+                {isUnactivated && (
+                  <span className="earn-entry-warn">⚠ bonus not activated</span>
+                )}
+              </div>
+              <div className="earn-entry-right">
+                <span className="earn-entry-amount">{fmt(amount)}/mo</span>
+                <span className="earn-entry-rate">
+                  {Number.isInteger(rate) ? rate : rate.toFixed(1)}x
+                </span>
+                <span className="earn-entry-earnings">= {fmt(monthlyEarnings)}/mo</span>
+                {!isOptimal && monthlyGap > 0.5 && bestCard && (
+                  <span className="earn-entry-gap">
+                    → use {bestCard.name.replace('Chase ', '').replace('American Express ', 'Amex ').replace('Capital One ', '')} +{fmt(monthlyGap)}/mo
+                  </span>
+                )}
+                {isOptimal && <span className="earn-entry-optimal">✓</span>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function EarnAnalyzer() {
   const { state, dispatch } = useApp();
   const { ownedCards, spend, redeemStyle, activationStatus } = state;
-  const { toggle: toggleOwned } = useOwnedCards();
 
-  // Local category entries (synced to context on change)
-  const [categoryEntries, setCategoryEntries] = useState(state.categoryEntries);
-  const [showResults, setShowResults] = useState(false);
-  const [aiText, setAiText] = useState('');
-  const [aiLoading, setAiLoading] = useState(false);
-  const [aiError, setAiError] = useState('');
-  const [waitlistEmail, setWaitlistEmail] = useState('');
-  const [waitlistDone, setWaitlistDone] = useState(false);
+  // Plaid state
+  const [plaidStatus, setPlaidStatus] = useState('loading'); // loading | connected | disconnected
+  const [creditAccounts, setCreditAccounts] = useState([]);
+  const [accountMapping, setAccountMapping] = useState(() => {
+    try { return JSON.parse(localStorage.getItem(MAPPING_KEY) || '{}'); } catch { return {}; }
+  });
+  const [transactions, setTransactions] = useState(null); // raw Plaid transactions
 
-  // Auto-populate category entries when ownedCards or spend changes
+  // Derived: does every credit account have a mapping decision?
+  const mappingComplete = creditAccounts.length === 0 ||
+    creditAccounts.every(a => accountMapping[a.account_id] !== undefined && accountMapping[a.account_id] !== '');
+
+  // categoryEntries: per-card per-category monthly spend
+  // Plaid mode: derived from transactions + mapping
+  // Manual mode: stored in context
+  const [manualEntries, setManualEntries] = useState(state.categoryEntries);
+
+  const plaidEntries = useMemo(() => {
+    if (!transactions || !mappingComplete || creditAccounts.length === 0) return null;
+    const { byCardCategory } = analyzeTransactionsByCard(transactions, accountMapping);
+    const entries = {};
+    for (const [cat, cardAmounts] of Object.entries(byCardCategory)) {
+      entries[cat] = Object.entries(cardAmounts)
+        .filter(([cardId]) => cardId !== '__skip__')
+        .map(([cardId, amount]) => ({ cardId, amount: String(amount) }));
+    }
+    return entries;
+  }, [transactions, accountMapping, mappingComplete, creditAccounts.length]);
+
+  // Also derive manual spend totals from Plaid transactions (for categories with no mapping)
+  const plaidSpendTotals = useMemo(() => {
+    if (!transactions) return null;
+    const result = analyzeTransactions(transactions);
+    const { monthlyAvg } = projectSpend(result.byCategory, Math.max(1, new Set(transactions.map(t => t.date.slice(0, 7))).size));
+    const totals = {};
+    for (const cat of CATEGORIES) totals[cat.id] = String(Math.round(monthlyAvg[cat.id] || 0));
+    return totals;
+  }, [transactions]);
+
+  const isPlaidMode = plaidStatus === 'connected' && mappingComplete && !!plaidEntries;
+  const categoryEntries = isPlaidMode ? plaidEntries : manualEntries;
+  const effectiveSpend = plaidSpendTotals || spend;
+
+  // Load Plaid status + accounts on mount
   useEffect(() => {
-    if (ownedCards.length === 0) return;
-    const existingCats = Object.keys(categoryEntries);
-    const updated = { ...categoryEntries };
+    fetch(`${API}/api/status`)
+      .then(r => r.json())
+      .then(data => {
+        if (!data.connected) { setPlaidStatus('disconnected'); return; }
+        setPlaidStatus('connected');
+        return fetch(`${API}/api/accounts`)
+          .then(r => r.json())
+          .then(d => {
+            const credit = (d.accounts || []).filter(a => a.type === 'credit');
+            setCreditAccounts(credit);
+          });
+      })
+      .catch(() => setPlaidStatus('disconnected'));
+  }, []);
+
+  // Fetch transactions once we know Plaid is connected + mapping complete
+  useEffect(() => {
+    if (plaidStatus !== 'connected' || !mappingComplete) return;
+    const end = new Date();
+    const start = new Date();
+    start.setMonth(start.getMonth() - 3);
+    fetch(`${API}/api/transactions?start_date=${start.toISOString().slice(0,10)}&end_date=${end.toISOString().slice(0,10)}`)
+      .then(r => r.json())
+      .then(d => setTransactions(d.transactions || []))
+      .catch(() => {});
+  }, [plaidStatus, mappingComplete]);
+
+  // Auto-populate manual entries from spend + best owned card (fallback when no Plaid)
+  useEffect(() => {
+    if (isPlaidMode || ownedCards.length === 0) return;
+    const updated = { ...manualEntries };
     let changed = false;
-
     for (const cat of CATEGORIES) {
-      const monthly = parseFloat(spend[cat.id]) || 0;
+      const monthly = parseFloat(effectiveSpend[cat.id]) || 0;
       if (!monthly) continue;
-      if (existingCats.includes(cat.id) && updated[cat.id].length > 0) continue;
-
-      // Find best owned card for this category
-      let bestCard = ownedCards[0];
-      let bestRate = 0;
+      if (updated[cat.id]?.length > 0) continue;
+      let bestCard = ownedCards[0], bestRate = 0;
       for (const cid of ownedCards) {
         const card = CARDS.find(c => c.id === cid);
         if (!card) continue;
-        const rate = getEffectiveRate(card, cat.id, activationStatus, monthly);
-        if (rate > bestRate) { bestRate = rate; bestCard = cid; }
+        const r = getEffectiveRate(card, cat.id, activationStatus, monthly);
+        if (r > bestRate) { bestRate = r; bestCard = cid; }
       }
       updated[cat.id] = [{ cardId: bestCard, amount: String(monthly) }];
       changed = true;
     }
-
     if (changed) {
-      setCategoryEntries(updated);
+      setManualEntries(updated);
       dispatch({ type: 'SET_CATEGORY_ENTRIES', payload: updated });
     }
-  }, [ownedCards.join(','), Object.values(spend).join(',')]);
+  }, [ownedCards.join(','), Object.values(effectiveSpend).join(','), isPlaidMode]); // eslint-disable-line
 
-  const syncEntries = entries => {
-    setCategoryEntries(entries);
-    dispatch({ type: 'SET_CATEGORY_ENTRIES', payload: entries });
+  const saveMapping = (mapping) => {
+    localStorage.setItem(MAPPING_KEY, JSON.stringify(mapping));
+    setAccountMapping(mapping);
   };
 
   const toggleActivation = cardId => dispatch({ type: 'TOGGLE_ACTIVATION', payload: { cardId } });
 
-  // Category helpers
-  const updateEntry = (cat, idx, field, value) => {
-    const updated = { ...categoryEntries, [cat]: [...(categoryEntries[cat] || [])] };
-    updated[cat][idx] = { ...updated[cat][idx], [field]: value };
-    syncEntries(updated);
-  };
-
-  const addEntry = cat => {
-    const updated = { ...categoryEntries };
-    updated[cat] = [...(updated[cat] || []), { cardId: ownedCards[0] || '', amount: '' }];
-    syncEntries(updated);
-  };
-
-  const removeEntry = (cat, idx) => {
-    const updated = { ...categoryEntries };
-    updated[cat] = updated[cat].filter((_, i) => i !== idx);
-    syncEntries(updated);
-  };
-
-  // Gaps
+  // Gap calculations
   const gap0 = useMemo(() => calculateGap0(categoryEntries, activationStatus, redeemStyle), [categoryEntries, activationStatus, redeemStyle]);
   const gap1 = useMemo(() => calculateGap1(categoryEntries, ownedCards, activationStatus, redeemStyle), [categoryEntries, ownedCards, activationStatus, redeemStyle]);
   const gap2 = useMemo(() => calculateGap2(categoryEntries, ownedCards, activationStatus, redeemStyle), [categoryEntries, ownedCards, activationStatus, redeemStyle]);
 
-  // Per-category summary
+  // Per-category breakdown for results table
   const catBreakdown = useMemo(() => {
+    const rdStyle = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
     return CATEGORIES.map(cat => {
       const entries = categoryEntries[cat.id] || [];
       const totalSpend = entries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
       if (!totalSpend) return null;
-
-      const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
 
       let actualEarnings = 0;
       for (const entry of entries) {
@@ -194,59 +360,46 @@ export default function EarnAnalyzer() {
         if (!card) continue;
         const amount = parseFloat(entry.amount) || 0;
         const rate = getEffectiveRate(card, cat.id, activationStatus, amount);
-        const val = (style?.valuations[card.issuer] || 1.0) / 100;
+        const val = (rdStyle?.valuations[card.issuer] || 1.0) / 100;
         actualEarnings += amount * rate * val;
       }
 
-      // Best owned
       let bestOwnedRate = 0, bestOwnedCard = null;
       for (const cid of ownedCards) {
         const card = CARDS.find(c => c.id === cid);
         if (!card) continue;
-        const rate = getEffectiveRate(card, cat.id, activationStatus, totalSpend);
-        if (rate > bestOwnedRate) { bestOwnedRate = rate; bestOwnedCard = card; }
+        const r = getEffectiveRate(card, cat.id, activationStatus, totalSpend);
+        if (r > bestOwnedRate) { bestOwnedRate = r; bestOwnedCard = card; }
       }
 
-      // Best market
       let bestMarketRate = 0, bestMarketCard = null;
       for (const card of CARDS) {
         const fakeAct = card.rotating?.isRotating ? { [card.id]: true } : {};
-        const rate = getEffectiveRate(card, cat.id, fakeAct, totalSpend);
-        if (rate > bestMarketRate) { bestMarketRate = rate; bestMarketCard = card; }
+        const r = getEffectiveRate(card, cat.id, fakeAct, totalSpend);
+        if (r > bestMarketRate) { bestMarketRate = r; bestMarketCard = card; }
       }
 
-      return {
-        cat,
-        totalSpend,
-        actualEarnings: actualEarnings * 12,
-        bestOwnedRate,
-        bestOwnedCard,
-        bestMarketRate,
-        bestMarketCard,
-        opportunity: (bestMarketRate - bestOwnedRate) * totalSpend * 12 * ((style?.valuations[bestMarketCard?.issuer] || 1.0) / 100),
-      };
+      const opportunity = (bestMarketRate - bestOwnedRate) * totalSpend * 12 *
+        ((rdStyle?.valuations[bestMarketCard?.issuer] || 1.0) / 100);
+
+      return { cat, totalSpend, actualEarnings: actualEarnings * 12, bestOwnedRate, bestOwnedCard, bestMarketRate, bestMarketCard, opportunity };
     }).filter(Boolean).sort((a, b) => b.opportunity - a.opportunity);
   }, [categoryEntries, ownedCards, activationStatus, redeemStyle]);
 
   const totalAnnualEarnings = catBreakdown.reduce((s, c) => s + c.actualEarnings, 0);
-  const totalAnnualFees = ownedCards.reduce((s, id) => {
-    const card = CARDS.find(c => c.id === id);
-    return s + (card?.annualFee || 0);
-  }, 0);
+  const totalAnnualFees = ownedCards.reduce((s, id) => s + (CARDS.find(c => c.id === id)?.annualFee || 0), 0);
 
   // AI analysis
-  const buildPrompt = () => {
-    const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
-    const cardNames = ownedCards.map(id => CARDS.find(c => c.id === id)?.name).filter(Boolean).join(', ');
-    const spendSummary = Object.entries(spend).filter(([, v]) => parseFloat(v) > 0)
-      .map(([k, v]) => `${k}: $${v}/mo`).join(', ');
-    return `You are a credit card rewards expert. A user has these credit cards: ${cardNames || 'none'}. Their monthly spend: ${spendSummary || 'not specified'}. Their redemption style: ${style?.label}. Their monthly opportunity gaps: Gap 0 (unactivated bonuses) = ${fmt(gap0)}, Gap 1 (wrong routing) = ${fmt(gap1)}, Gap 2 (better cards) = ${fmt(gap2)}. In 3-4 sentences, give them the single most impactful actionable advice to maximize their rewards. Be specific and direct. Don't repeat the numbers back to them.`;
-  };
+  const [aiText, setAiText] = useState('');
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiError, setAiError] = useState('');
 
   const fetchAI = async () => {
-    setAiLoading(true);
-    setAiError('');
-    setAiText('');
+    setAiLoading(true); setAiError(''); setAiText('');
+    const rdStyle = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+    const cardNames = ownedCards.map(id => CARDS.find(c => c.id === id)?.name).filter(Boolean).join(', ');
+    const spendSummary = catBreakdown.map(r => `${r.cat.label}: ${fmt(r.totalSpend)}/mo`).join(', ');
+    const prompt = `You are a credit card rewards expert. Cards: ${cardNames || 'none'}. Monthly spend: ${spendSummary || 'not set'}. Redemption: ${rdStyle?.label}. Monthly gaps — unactivated bonuses: ${fmt(gap0)}, wrong routing: ${fmt(gap1)}, better market cards: ${fmt(gap2)}. In 3-4 sentences, give the single most impactful actionable advice. Be specific. Don't repeat the numbers back.`;
     try {
       const res = await fetch('https://api.anthropic.com/v1/messages', {
         method: 'POST',
@@ -256,210 +409,176 @@ export default function EarnAnalyzer() {
           'content-type': 'application/json',
           'anthropic-dangerous-direct-browser-access': 'true',
         },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 400,
-          messages: [{ role: 'user', content: buildPrompt() }],
-        }),
+        body: JSON.stringify({ model: 'claude-sonnet-4-6', max_tokens: 400, messages: [{ role: 'user', content: prompt }] }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error.message);
-      setAiText(data.content?.[0]?.text || 'No response received.');
+      setAiText(data.content?.[0]?.text || '');
     } catch (err) {
-      setAiError(err.message || 'Failed to get AI analysis. Check your VITE_ANTHROPIC_API_KEY.');
+      setAiError(err.message || 'Failed. Check your VITE_ANTHROPIC_API_KEY.');
     } finally {
       setAiLoading(false);
     }
   };
 
   const rotatingOwned = CARDS.filter(c => c.rotating?.isRotating && ownedCards.includes(c.id));
+  const hasAnyData = ownedCards.length > 0 || Object.values(effectiveSpend).some(v => parseFloat(v) > 0);
 
-  if (ownedCards.length === 0 && Object.values(spend).every(v => !parseFloat(v))) {
+  // ── Empty state ──────────────────────────────────────────────────────────────
+  if (!hasAnyData && plaidStatus !== 'loading') {
     return (
       <div className="page-container">
         <div className="empty-state">
           <div className="empty-state-icon">📊</div>
           <div className="empty-state-title">Start with your wallet</div>
-          <div className="empty-state-desc">Complete the Wallet Optimizer first to load your cards and spending — then come here to see exactly what you're earning (and missing).</div>
+          <div className="empty-state-desc">
+            Complete the Wallet Optimizer first to load your cards and spending — then come back here to see exactly what you're earning and missing.
+          </div>
           <Link to="/wallet" className="btn btn-primary">Go to Wallet Optimizer →</Link>
         </div>
       </div>
     );
   }
 
+  // ── Account matching step (Plaid connected, unmapped accounts exist) ─────────
+  const needsMapping = plaidStatus === 'connected' && creditAccounts.length > 0 && !mappingComplete;
+
   return (
     <div className="page-container">
-      <h1 style={{ fontSize: 28, fontWeight: 800, color: 'var(--gray-900)', marginBottom: 6 }}>Earn Analyzer</h1>
-      <p style={{ color: 'var(--gray-500)', fontSize: 14, marginBottom: 28 }}>
-        See exactly what each dollar earns and where you're leaving money behind.
-      </p>
+      <div style={{ marginBottom: 28 }}>
+        <h1 style={{ fontSize: 28, fontWeight: 800, color: 'var(--gray-900)', marginBottom: 6 }}>Earn Analyzer</h1>
+        <p style={{ color: 'var(--gray-500)', fontSize: 14 }}>
+          {isPlaidMode
+            ? 'Showing actual spending from your connected bank accounts.'
+            : 'See what each dollar earns and where you\'re leaving money behind.'}
+        </p>
+      </div>
 
-      {/* ── Section A: Card selector ── */}
+      {/* ── Section A: Cards + activation ────────────────────────────────────── */}
       <div className="earn-section">
-        <div className="earn-section-title">Your Cards</div>
-        <div className="earn-section-sub">Select all cards you own. Tap to toggle.</div>
-
-        <div className="card-chips">
-          {CARDS.map(card => (
-            <button key={card.id} className={`card-chip ${ownedCards.includes(card.id) ? 'owned' : ''}`}
-              onClick={() => toggleOwned(card.id)}>
-              {ownedCards.includes(card.id) ? '✓ ' : ''}{card.name}
-            </button>
-          ))}
+        <div className="earn-section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          Your Cards
+          <Link to="/wallet" style={{ fontSize: 12, fontWeight: 500, color: 'var(--color-primary)', textDecoration: 'none' }}>
+            Edit in Wallet Optimizer →
+          </Link>
         </div>
 
-        {rotatingOwned.length > 0 && (
-          <div className="activation-banners">
-            {rotatingOwned.map(card => (
-              <ActivationBanner
-                key={card.id}
-                card={card}
-                activationStatus={activationStatus}
-                spend={spend}
-                redeemStyle={redeemStyle}
-                onToggle={() => toggleActivation(card.id)}
-              />
-            ))}
-          </div>
+        {ownedCards.length > 0 ? (
+          <>
+            <div className="earn-owned-pills" style={{ marginBottom: rotatingOwned.length > 0 ? 16 : 0 }}>
+              {ownedCards.map(cid => {
+                const card = CARDS.find(c => c.id === cid);
+                return card ? (
+                  <span key={cid} className="earn-owned-pill">
+                    {card.name.replace('Chase ', '').replace('American Express ', 'Amex ').replace('Capital One ', '')}
+                  </span>
+                ) : null;
+              })}
+            </div>
+            {rotatingOwned.length > 0 && (
+              <div className="activation-banners">
+                <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--gray-500)', marginBottom: 8, textTransform: 'uppercase', letterSpacing: '0.5px' }}>
+                  Quarterly bonus activation
+                </div>
+                {rotatingOwned.map(card => (
+                  <ActivationBanner
+                    key={card.id}
+                    card={card}
+                    activationStatus={activationStatus}
+                    categoryEntries={categoryEntries}
+                    redeemStyle={redeemStyle}
+                    onToggle={() => toggleActivation(card.id)}
+                  />
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <p style={{ color: 'var(--gray-400)', fontSize: 14 }}>
+            No cards set — <Link to="/wallet" style={{ color: 'var(--color-primary)' }}>complete the Wallet Optimizer first</Link>.
+          </p>
         )}
       </div>
 
-      {/* ── Section B: Spend entry table ── */}
-      <div className="earn-section">
-        <div className="earn-section-title">Spending by Category</div>
-        <div className="earn-section-sub">
-          Assign each dollar to the card you actually use. Split categories across multiple cards.
-        </div>
+      {/* ── Account matcher (shown only when needed) ────────────────────────── */}
+      {needsMapping && (
+        <AccountMatcher
+          accounts={creditAccounts}
+          initialMapping={accountMapping}
+          onSave={saveMapping}
+        />
+      )}
 
-        {ownedCards.length === 0 ? (
-          <div style={{ color: 'var(--gray-400)', fontSize: 14, padding: '12px 0' }}>
-            Select your cards above first.
+      {/* ── Section B: Spending by card ──────────────────────────────────────── */}
+      {!needsMapping && ownedCards.length > 0 && (
+        <div className="earn-section">
+          <div className="earn-section-title" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            Spending by Card
+            {isPlaidMode && (
+              <span style={{ fontSize: 12, color: 'var(--color-success)', fontWeight: 500 }}>
+                🔗 From your bank · last 3 months
+              </span>
+            )}
+            {plaidStatus === 'connected' && mappingComplete && (
+              <button
+                className="earn-source-switch"
+                style={{ fontSize: 12, color: 'var(--gray-400)' }}
+                onClick={() => {
+                  localStorage.removeItem(MAPPING_KEY);
+                  setAccountMapping({});
+                  setCreditAccounts([]);
+                }}
+              >
+                Re-link accounts
+              </button>
+            )}
           </div>
-        ) : (
-          <div className="category-sections">
+          <div className="earn-section-sub">
+            {isPlaidMode
+              ? 'Actual spending pulled from your connected accounts. Each row shows what you earned and whether a better card is available.'
+              : 'Your estimated monthly spend, routed to your best owned card per category.'}
+          </div>
+
+          <div className="earn-cat-list">
             {CATEGORIES.map(cat => {
               const entries = categoryEntries[cat.id] || [];
-              const catSpend = parseFloat(spend[cat.id]) || 0;
-              const allocTotal = entries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
-              const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
-
-              // Best owned / best market rates for header
-              let bestOwnedRate = 0;
-              let bestMarketRate = 0;
-              let bestOwnedCard = null;
-              let bestMarketCard = null;
-
-              for (const cid of ownedCards) {
-                const card = CARDS.find(c => c.id === cid);
-                if (!card) continue;
-                const rate = getEffectiveRate(card, cat.id, activationStatus, catSpend);
-                if (rate > bestOwnedRate) { bestOwnedRate = rate; bestOwnedCard = card; }
-              }
-              for (const card of CARDS) {
-                const fakeAct = card.rotating?.isRotating ? { [card.id]: true } : {};
-                const rate = getEffectiveRate(card, cat.id, fakeAct, catSpend);
-                if (rate > bestMarketRate) { bestMarketRate = rate; bestMarketCard = card; }
-              }
-
+              if (!entries.length || !entries.some(e => parseFloat(e.amount) > 0)) return null;
               return (
-                <div key={cat.id} className="category-section">
-                  <div className="category-header">
-                    <div className="category-header-name">
-                      <span>{CAT_ICONS[cat.id]}</span>
-                      <span>{cat.label}</span>
-                    </div>
-                    <div className="category-total">
-                      Budget: {catSpend > 0 ? `$${catSpend}/mo` : 'not set'}
-                    </div>
-                    <div className="rate-badges">
-                      {bestOwnedCard && (
-                        <span className={`rate-badge ${bestOwnedRate >= 3 ? 'good' : 'warn'}`}>
-                          Best owned: {bestOwnedRate % 1 === 0 ? bestOwnedRate : bestOwnedRate.toFixed(1)}x
-                        </span>
-                      )}
-                      {bestMarketCard && bestMarketRate > bestOwnedRate && (
-                        <span className="rate-badge market">
-                          Market: {bestMarketRate}x ({bestMarketCard.name.split(' ').slice(-1)[0]})
-                        </span>
-                      )}
-                    </div>
-                  </div>
-
-                  <div className="category-entries">
-                    {entries.map((entry, idx) => {
-                      const card = CARDS.find(c => c.id === entry.cardId);
-                      const entryAmount = parseFloat(entry.amount) || 0;
-                      return (
-                        <div key={idx} className="entry-row">
-                          <select className="entry-select" value={entry.cardId}
-                            onChange={e => updateEntry(cat.id, idx, 'cardId', e.target.value)}>
-                            {ownedCards.map(cid => {
-                              const c = CARDS.find(x => x.id === cid);
-                              if (!c) return null;
-                              const r = getEffectiveRate(c, cat.id, activationStatus, entryAmount);
-                              return <option key={cid} value={cid}>{c.name} ({r % 1 === 0 ? r : r.toFixed(1)}x)</option>;
-                            })}
-                          </select>
-                          <div className="input-wrap" style={{ width: 110 }}>
-                            <span>$</span>
-                            <input className="entry-amount" type="number" min="0" placeholder="0"
-                              value={entry.amount}
-                              onChange={e => updateEntry(cat.id, idx, 'amount', e.target.value)}
-                              style={{ paddingLeft: 24 }} />
-                          </div>
-                          <div className="entry-badge">
-                            {card && <RateBadge card={card} category={cat.id} activationStatus={activationStatus} monthlySpend={entryAmount} redeemStyle={redeemStyle} />}
-                          </div>
-                          <button className="entry-remove" onClick={() => removeEntry(cat.id, idx)} title="Remove">✕</button>
-                        </div>
-                      );
-                    })}
-
-                    {allocTotal > catSpend && catSpend > 0 && (
-                      <div className="overage-warn">⚠ Allocated ${allocTotal} exceeds budget ${catSpend}/mo</div>
-                    )}
-
-                    <button className="add-entry-btn" onClick={() => addEntry(cat.id)}>
-                      + Add Card
-                    </button>
-                  </div>
-                </div>
+                <CategoryRow
+                  key={cat.id}
+                  cat={cat}
+                  entries={entries}
+                  ownedCards={ownedCards}
+                  activationStatus={activationStatus}
+                  redeemStyle={redeemStyle}
+                />
               );
             })}
           </div>
-        )}
-      </div>
-
-      {/* ── Calculate button ── */}
-      {ownedCards.length > 0 && (
-        <div style={{ textAlign: 'center', marginBottom: 24 }}>
-          <button className="btn btn-primary" style={{ fontSize: 16, padding: '14px 36px' }}
-            onClick={() => setShowResults(true)}>
-            Calculate My Gaps →
-          </button>
         </div>
       )}
 
-      {/* ── Section C: Results ── */}
-      {showResults && (
+      {/* ── Section C: Gap analysis ───────────────────────────────────────────── */}
+      {!needsMapping && catBreakdown.length > 0 && (
         <div className="earn-results">
+
           {/* Gap cards */}
           <div className="gaps-section">
-            <h3>Your Opportunity Gaps</h3>
+            <h3>Where you're leaving money behind</h3>
             <div className="gap-cards">
               {[
-                { cls: 'gap0', label: 'Gap 0', title: 'Unactivated Bonuses', val: gap0, unit: '/mo',
-                  desc: gap0 > 0 ? `${fmt(gap0 * 12)}/yr from unactivated rotating categories` : 'All rotating bonuses activated ✓' },
-                { cls: 'gap1', label: 'Gap 1', title: 'Wrong Card Routing', val: gap1, unit: '/mo',
-                  desc: gap1 > 0 ? `${fmt(gap1 * 12)}/yr lost to sub-optimal card assignment` : 'Your routing is already optimal ✓' },
-                { cls: 'gap2', label: 'Gap 2', title: 'Better Market Cards', val: gap2, unit: '/mo',
+                { cls: 'gap0', label: 'Gap 0', title: 'Unactivated Bonuses', val: gap0,
+                  desc: gap0 > 0 ? `${fmt(gap0 * 12)}/yr from rotating bonuses you haven't activated` : 'All rotating bonuses activated ✓' },
+                { cls: 'gap1', label: 'Gap 1', title: 'Wrong Card Routing', val: gap1,
+                  desc: gap1 > 0 ? `${fmt(gap1 * 12)}/yr lost by using a lower-earning card` : 'Your routing is optimal ✓' },
+                { cls: 'gap2', label: 'Gap 2', title: 'Better Cards Exist', val: gap2,
                   desc: gap2 > 0 ? `${fmt(gap2 * 12)}/yr available with better market cards` : "You're maximizing the market ✓" },
               ].map(g => (
                 <div key={g.cls} className={`gap-card ${g.cls}`}>
                   <div className="gap-number">{g.label}</div>
                   <div className="gap-title">{g.title}</div>
                   <div className={`gap-value ${g.val === 0 ? 'positive' : ''}`}>
-                    {g.val === 0 ? '✓ $0' : `${fmt(g.val)}${g.unit}`}
+                    {g.val === 0 ? '✓ $0' : `${fmt(g.val)}/mo`}
                   </div>
                   <div className="gap-desc">{g.desc}</div>
                 </div>
@@ -468,17 +587,17 @@ export default function EarnAnalyzer() {
           </div>
 
           {/* Annual picture */}
-          <div className="annual-summary" style={{ boxShadow: 'var(--shadow-md)', border: '1.5px solid var(--gray-200)' }}>
+          <div className="annual-summary" style={{ boxShadow: 'var(--shadow-md)', border: '1.5px solid var(--gray-200)', marginBottom: 24 }}>
             {[
-              { label: 'Annual Earnings', val: totalAnnualEarnings, cls: 'positive' },
-              { label: 'Annual Fees', val: -totalAnnualFees, cls: totalAnnualFees > 0 ? '' : 'positive' },
-              { label: 'Net / Year', val: totalAnnualEarnings - totalAnnualFees, cls: totalAnnualEarnings - totalAnnualFees >= 0 ? 'positive' : 'negative' },
-              { label: 'Total Gaps / Year', val: (gap0 + gap1 + gap2) * 12, cls: 'negative' },
+              { label: 'Annual Earnings',   val: totalAnnualEarnings,                          cls: 'positive' },
+              { label: 'Annual Fees',        val: -totalAnnualFees,                             cls: totalAnnualFees > 0 ? '' : 'positive' },
+              { label: 'Net / Year',         val: totalAnnualEarnings - totalAnnualFees,        cls: totalAnnualEarnings >= totalAnnualFees ? 'positive' : 'negative' },
+              { label: 'Total Gap / Year',   val: (gap0 + gap1 + gap2) * 12,                   cls: 'negative' },
             ].map(s => (
               <div key={s.label} className="summary-stat">
                 <div className="summary-stat-label">{s.label}</div>
-                <div className={`summary-stat-value ${s.cls}`} style={{
-                  color: s.cls === 'positive' ? 'var(--teal)' : s.cls === 'negative' ? 'var(--red)' : 'var(--gray-700)'
+                <div className="summary-stat-value" style={{
+                  color: s.cls === 'positive' ? 'var(--teal)' : s.cls === 'negative' ? 'var(--red)' : 'var(--gray-700)',
                 }}>
                   {s.val < 0 ? '−' : ''}{fmt(Math.abs(s.val))}
                 </div>
@@ -486,17 +605,17 @@ export default function EarnAnalyzer() {
             ))}
           </div>
 
-          {/* Per-category breakdown */}
+          {/* Per-category opportunity table */}
           <div style={{ background: 'white', borderRadius: 14, border: '1.5px solid var(--gray-200)', overflow: 'hidden', boxShadow: 'var(--shadow)', marginBottom: 24 }}>
             <table className="breakdown-table">
               <thead>
                 <tr>
                   <th>Category</th>
-                  <th>Monthly Spend</th>
-                  <th>Annual Earnings</th>
-                  <th>Best Owned Rate</th>
-                  <th>Best Market Rate</th>
-                  <th>Annual Opportunity</th>
+                  <th>Monthly</th>
+                  <th>Earning / yr</th>
+                  <th>Best you own</th>
+                  <th>Best on market</th>
+                  <th>Gap / yr</th>
                 </tr>
               </thead>
               <tbody>
@@ -507,12 +626,12 @@ export default function EarnAnalyzer() {
                     <td style={{ color: 'var(--teal)', fontWeight: 700 }}>{fmt(row.actualEarnings)}</td>
                     <td>
                       <span className={`rate-badge ${row.bestOwnedRate >= 3 ? 'good' : 'warn'}`}>
-                        {row.bestOwnedRate % 1 === 0 ? row.bestOwnedRate : row.bestOwnedRate.toFixed(1)}x — {row.bestOwnedCard?.name}
+                        {Number.isInteger(row.bestOwnedRate) ? row.bestOwnedRate : row.bestOwnedRate.toFixed(1)}x — {row.bestOwnedCard?.name.split(' ').pop()}
                       </span>
                     </td>
                     <td>
                       <span className="rate-badge market">
-                        {row.bestMarketRate}x — {row.bestMarketCard?.name}
+                        {Number.isInteger(row.bestMarketRate) ? row.bestMarketRate : row.bestMarketRate.toFixed(1)}x — {row.bestMarketCard?.name.split(' ').pop()}
                       </span>
                     </td>
                     <td style={{ color: row.opportunity > 0 ? 'var(--red)' : 'var(--teal)', fontWeight: 700 }}>
@@ -526,24 +645,18 @@ export default function EarnAnalyzer() {
 
           {/* AI analysis */}
           <div className="ai-insight-card">
-            <div className="ai-insight-header">
-              ✨ AI Analysis
-            </div>
+            <div className="ai-insight-header">✨ AI Analysis</div>
             {!aiText && !aiLoading && !aiError && (
               <div>
                 <p style={{ fontSize: 13, color: 'var(--gray-500)', marginBottom: 12 }}>
-                  Get a personalized insight based on your specific spend profile and gaps.
+                  Get a personalized recommendation based on your actual spend and gaps.
                 </p>
                 <button className="btn btn-primary" style={{ fontSize: 14 }} onClick={fetchAI}>
                   Get AI Analysis
                 </button>
               </div>
             )}
-            {aiLoading && (
-              <div className="ai-insight-loading">
-                <div className="spinner" /> Analyzing your spend profile…
-              </div>
-            )}
+            {aiLoading && <div className="ai-insight-loading"><div className="spinner" /> Analyzing…</div>}
             {aiError && (
               <div style={{ color: 'var(--red)', fontSize: 13 }}>
                 {aiError}
@@ -553,28 +666,7 @@ export default function EarnAnalyzer() {
             {aiText && <div className="ai-insight-body">{aiText}</div>}
           </div>
 
-          {/* Waitlist */}
-          <div style={{ marginTop: 28, padding: '20px 24px', background: 'var(--purple-faint)', borderRadius: 12 }}>
-            <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--purple)', marginBottom: 6 }}>
-              Get notified when Redeem Scanner launches
-            </div>
-            <div style={{ fontSize: 13, color: 'var(--gray-500)', marginBottom: 12 }}>
-              Find your best transfer partners and sweet spots based on your actual point balances.
-            </div>
-            {waitlistDone ? (
-              <div style={{ color: 'var(--teal)', fontWeight: 600, fontSize: 14 }}>✓ You're on the list!</div>
-            ) : (
-              <div className="waitlist-wrap">
-                <input className="waitlist-input" type="email" placeholder="your@email.com"
-                  value={waitlistEmail} onChange={e => setWaitlistEmail(e.target.value)} />
-                <button className="btn btn-primary" style={{ fontSize: 14 }} onClick={() => setWaitlistDone(true)}>
-                  Notify me
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* CTA to wallet optimizer */}
+          {/* CTA */}
           <div style={{ textAlign: 'center', marginTop: 28 }}>
             <Link to="/wallet" className="btn btn-outline" style={{ fontSize: 15 }}>
               See which wallets fix this →

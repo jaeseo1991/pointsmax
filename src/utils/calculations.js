@@ -12,6 +12,38 @@ function getValuation(issuer, redeemStyle) {
   return (style.valuations[issuer] || 1.0) / 100; // returns decimal (e.g. 0.018)
 }
 
+// Chase UR cards (CFU, CF) require CSR or CSP in the same wallet to access
+// portal/transfer rates. Without one, points are worth 1cpp (cash back only).
+const CHASE_UR_UNLOCKERS = new Set(['csr', 'csp']);
+
+// CFU earns 1.5x UR on everything. Whenever CSR or CSP is in the wallet,
+// CFU is strictly additive (no fee, unlocked value). Always include it.
+const CHASE_UR_BASELINE = 'cfu';
+
+/**
+ * Expands a wallet by injecting CFU whenever CSR or CSP is present.
+ * CFU has no annual fee and earns 1.5x UR on all spend — with an unlocker
+ * card in the wallet those points are worth 1.5–2.2¢, making it always
+ * additive. Callers that want to show "as-is" (e.g. gap analysis on the
+ * user's literal current cards) should skip this.
+ */
+export function withChaseBaseline(cardIds) {
+  const ids = Array.isArray(cardIds) ? cardIds : [];
+  const hasUnlocker = ids.some(id => CHASE_UR_UNLOCKERS.has(id));
+  if (hasUnlocker && !ids.includes(CHASE_UR_BASELINE)) {
+    return [...ids, CHASE_UR_BASELINE];
+  }
+  return ids;
+}
+
+function getWalletValuation(card, walletCardIds, redeemStyle) {
+  if (card.issuer === 'Chase' && redeemStyle !== 'cashout') {
+    const hasUnlocker = walletCardIds.some(id => CHASE_UR_UNLOCKERS.has(id));
+    if (!hasUnlocker) return 0.01; // 1cpp — no transfer/portal access
+  }
+  return getValuation(card.issuer, redeemStyle);
+}
+
 // ── exported ─────────────────────────────────────────────────────────────────
 
 /**
@@ -96,30 +128,32 @@ export function calculateGap0(categoryEntries = {}, activationStatus = {}, redee
  * Compares what the user actually assigned vs the best card they own per category.
  */
 export function calculateGap1(categoryEntries = {}, ownedCards = [], activationStatus = {}, redeemStyle = 'portal') {
+  // Optimal routing includes CFU whenever CSR/CSP is owned — it's always additive
+  const optimalCards = withChaseBaseline(ownedCards);
   let gap = 0;
 
   for (const [category, entries] of Object.entries(categoryEntries)) {
     const totalSpend = entries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
     if (!totalSpend) continue;
 
-    // Actual earnings
+    // Actual earnings — use literal ownedCards (reflects user's real current routing)
     let actualEarnings = 0;
     for (const entry of entries) {
       const card = getCard(entry.cardId);
       if (!card) continue;
       const amount = parseFloat(entry.amount) || 0;
       const rate = getEffectiveRate(card, category, activationStatus, amount);
-      const val = getValuation(card.issuer, redeemStyle);
+      const val = getWalletValuation(card, ownedCards, redeemStyle);
       actualEarnings += amount * rate * val;
     }
 
-    // Optimal earnings (best owned card gets all spend)
+    // Optimal earnings — use optimalCards (includes CFU if CSR/CSP present)
     let bestEarnings = 0;
-    for (const cardId of ownedCards) {
+    for (const cardId of optimalCards) {
       const card = getCard(cardId);
       if (!card) continue;
       const rate = getEffectiveRate(card, category, activationStatus, totalSpend);
-      const val = getValuation(card.issuer, redeemStyle);
+      const val = getWalletValuation(card, optimalCards, redeemStyle);
       const earnings = totalSpend * rate * val;
       if (earnings > bestEarnings) bestEarnings = earnings;
     }
@@ -141,24 +175,26 @@ export function calculateGap2(categoryEntries = {}, ownedCards = [], activationS
     const totalSpend = entries.reduce((s, e) => s + (parseFloat(e.amount) || 0), 0);
     if (!totalSpend) continue;
 
-    // Best owned card
+    // Best owned card (respects wallet transfer unlock rules)
     let bestOwned = 0;
     for (const cardId of ownedCards) {
       const card = getCard(cardId);
       if (!card) continue;
       const rate = getEffectiveRate(card, category, activationStatus, totalSpend);
-      const val = getValuation(card.issuer, redeemStyle);
+      const val = getWalletValuation(card, ownedCards, redeemStyle);
       const earnings = totalSpend * rate * val;
       if (earnings > bestOwned) bestOwned = earnings;
     }
 
     // Best market card (all CARDS, activated rotating)
+    // For Chase cards, assume the user would also hold a premium Chase card
+    const marketChaseUnlockers = ['csr', 'csp'];
     let bestMarket = 0;
     for (const card of CARDS) {
-      // For market comparison, assume rotating cards are activated
       const fakeActivation = card.rotating?.isRotating ? { [card.id]: true } : {};
       const rate = getEffectiveRate(card, category, fakeActivation, totalSpend);
-      const val = getValuation(card.issuer, redeemStyle);
+      const fakeWallet = card.issuer === 'Chase' ? [card.id, ...marketChaseUnlockers] : [card.id];
+      const val = getWalletValuation(card, fakeWallet, redeemStyle);
       const earnings = totalSpend * rate * val;
       if (earnings > bestMarket) bestMarket = earnings;
     }
@@ -177,6 +213,8 @@ export function calculateGap2(categoryEntries = {}, ownedCards = [], activationS
  * @param {string} redeemStyle
  */
 export function calculateWalletEarnings(walletCardIds, spend, activationStatus = {}, redeemStyle = 'portal') {
+  // Always include CFU when CSR/CSP is present — it's $0 fee and strictly additive
+  const effectiveIds = withChaseBaseline(walletCardIds);
   let total = 0;
 
   for (const [category, monthlyStr] of Object.entries(spend)) {
@@ -184,11 +222,11 @@ export function calculateWalletEarnings(walletCardIds, spend, activationStatus =
     if (!monthly) continue;
 
     let bestEarnings = 0;
-    for (const cardId of walletCardIds) {
+    for (const cardId of effectiveIds) {
       const card = getCard(cardId);
       if (!card) continue;
       const rate = getEffectiveRate(card, category, activationStatus, monthly);
-      const val = getValuation(card.issuer, redeemStyle);
+      const val = getWalletValuation(card, effectiveIds, redeemStyle);
       const earnings = monthly * 12 * rate * val;
       if (earnings > bestEarnings) bestEarnings = earnings;
     }
@@ -212,7 +250,8 @@ export function calculateEffectiveFee(cardId, selectedCredits = {}) {
   const creditValue = credits
     .filter(c => selectedIds.includes(c.id))
     .reduce((s, c) => s + c.value, 0);
-  return Math.max(0, baseFee - creditValue);
+  // Allow negative: credits exceeding the fee are real savings that add to net/yr
+  return baseFee - creditValue;
 }
 
 /**

@@ -1,22 +1,53 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
+import { usePlaidLink } from 'react-plaid-link';
 import { useApp } from '../context/AppContext';
 import { CARDS, CATEGORIES, STATEMENT_CREDITS, REDEMPTION_STYLES, WALLET_TIERS } from '../data/cards';
 import {
   calculateWalletEarnings,
   calculateEffectiveFee,
-  calculateBreakeven,
-  generateCumulativeData,
   getEffectiveRate,
   fmt,
 } from '../utils/calculations';
+import { analyzeTransactions, projectSpend } from '../utils/plaidCategories';
+
+const API = 'http://localhost:3001';
+
+// ─── Plaid account → card matching ───────────────────────────────────────────
+// Ordered most-specific first so "Sapphire Preferred" doesn't match "Sapphire Reserve"
+const CARD_NAME_PATTERNS = [
+  { id: 'csr',           keywords: ['sapphire reserve'] },
+  { id: 'csp',           keywords: ['sapphire preferred'] },
+  { id: 'cfu',           keywords: ['freedom unlimited'] },
+  { id: 'cf',            keywords: ['freedom flex', 'freedom'] },
+  { id: 'amex_plat',     keywords: ['platinum card', 'the platinum', 'amex platinum'] },
+  { id: 'amex_gold',     keywords: ['gold card', 'amex gold', 'american express gold'] },
+  { id: 'amex_bcp',      keywords: ['blue cash preferred', 'blue cash everyday'] },
+  { id: 'cdc',           keywords: ['double cash'] },
+  { id: 'wfac',          keywords: ['active cash'] },
+  { id: 'co_venture',    keywords: ['venture x', 'venture rewards', 'venture'] },
+  { id: 'discover',      keywords: ['discover it', 'discover'] },
+  { id: 'usb_cash_plus', keywords: ['cash+', 'cash plus'] },
+  { id: 'robinhood_gold',keywords: ['robinhood gold', 'robinhood'] },
+  { id: 'amazon_prime',  keywords: ['amazon prime', 'prime rewards', 'amazon rewards'] },
+  { id: 'apple_card',    keywords: ['apple card'] },
+  { id: 'bilt',          keywords: ['bilt'] },
+];
+
+function matchAccountToCard(name = '', officialName = '') {
+  const haystack = `${name} ${officialName}`.toLowerCase();
+  for (const { id, keywords } of CARD_NAME_PATTERNS) {
+    if (keywords.some(kw => haystack.includes(kw))) return id;
+  }
+  return null;
+}
 
 // ─── Step icons ───────────────────────────────────────────────────────────────
 const CAT_ICONS = { dining:'🍽️', groceries:'🛒', travel:'✈️', gas:'⛽', shopping:'🛍️', subscriptions:'📱', entertainment:'🎬', other:'💳' };
 const TOP_RATES = {
   cfu: ['dining: 3x', 'all else: 1.5x'], cdc: ['everything: 2x'],
-  csp: ['dining: 3x', 'travel: 2x'], csr: ['travel: 10x', 'dining: 3x'],
-  amex_gold: ['dining: 4x', 'groceries: 4x', 'travel: 3x'], amex_plat: ['travel: 5x'],
+  csp: ['dining: 3x', 'travel: 2x'], csr: ['dining: 3x', 'travel: 3x', '+$300 travel credit'],
+  amex_gold: ['dining: 4x', 'groceries: 4x', 'travel: 3x (flights)'], amex_plat: ['travel: 5x (flights)'],
   amex_bcp: ['groceries: 6x', 'subscriptions: 6x', 'gas: 3x'],
   cf: ['rotating 5x (Q2: travel, dining, subs)', '1x base'],
   discover: ['rotating 5x (Q2: shopping, groceries, subs)', '1x base'],
@@ -58,7 +89,7 @@ const SPEND_PRESETS = [
   },
 ];
 
-function StepSpend({ local, setLocal, onNext }) {
+function StepSpend({ local, setLocal, onNext, plaidSource, onConnectBank }) {
   const spend = local.spend;
   const total = Object.values(spend).reduce((s, v) => s + (parseFloat(v) || 0), 0);
   const applyPreset = (preset) => {
@@ -70,6 +101,14 @@ function StepSpend({ local, setLocal, onNext }) {
     <>
       <h2 className="step-heading">Monthly Spending</h2>
       <p className="step-subheading">Enter your average monthly spend, or start with a profile.</p>
+      {plaidSource && (
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 8, background: 'var(--color-success-light)', border: '1px solid var(--color-success)', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 13, color: 'var(--color-success)' }}>
+          <span>✅ <strong>Pre-filled from your bank transactions</strong> — review and adjust as needed.</span>
+          <Link to="/transactions" style={{ color: 'var(--color-success)', whiteSpace: 'nowrap', textDecoration: 'underline', fontSize: 12 }}>
+            See what we read →
+          </Link>
+        </div>
+      )}
       <div className="spend-presets">
         {SPEND_PRESETS.map(p => (
           <button key={p.id} className="spend-preset-btn" onClick={() => applyPreset(p)}>
@@ -96,9 +135,21 @@ function StepSpend({ local, setLocal, onNext }) {
           <span className="total">{fmt(total)}</span>
         </div>
       )}
+      {total === 0 && (
+        <p style={{ fontSize: 13, color: 'var(--gray-400)', marginTop: 12, textAlign: 'center' }}>
+          Enter at least one spending category to continue.
+        </p>
+      )}
       <div className="wizard-nav">
-        <div />
-        <button className="btn btn-primary" onClick={onNext}>Next: Pick Cards →</button>
+        <button
+          onClick={onConnectBank}
+          style={{ background: 'none', border: 'none', fontSize: 13, color: 'var(--gray-400)', cursor: 'pointer', textDecoration: 'underline', padding: 0 }}
+        >
+          ← Connect bank instead
+        </button>
+        <button className="btn btn-primary" onClick={onNext} disabled={total === 0}
+          style={{ opacity: total === 0 ? 0.4 : 1, cursor: total === 0 ? 'not-allowed' : 'pointer' }}>
+          Next: Pick Cards →</button>
       </div>
     </>
   );
@@ -119,7 +170,7 @@ const BANK_GROUPS = [
 ];
 const AMEX_CARDS = CARDS.filter(c => c.issuer === 'Amex');
 
-function StepCards({ local, setLocal, onNext, onBack }) {
+function StepCards({ local, setLocal, onNext, onBack, plaidDetectedCards = [] }) {
   const owned = local.ownedCards;
   const [showElig, setShowElig] = useState(false);
 
@@ -142,6 +193,12 @@ function StepCards({ local, setLocal, onNext, onBack }) {
       <h2 className="step-heading">Your Cards</h2>
       <p className="step-subheading">Select all credit cards you currently own.</p>
 
+      {plaidDetectedCards.length > 0 && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, background: 'var(--color-success-light)', border: '1px solid var(--color-success)', borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 13, color: 'var(--color-success)' }}>
+          🔗 <strong>{plaidDetectedCards.length} card{plaidDetectedCards.length !== 1 ? 's' : ''} detected from your bank</strong> — review and add any that are missing.
+        </div>
+      )}
+
       {BANK_GROUPS.map(bank => {
         const bankCards = CARDS.filter(c => c.issuer === bank.issuer);
         if (bankCards.length === 0) return null;
@@ -160,18 +217,6 @@ function StepCards({ local, setLocal, onNext, onBack }) {
                   <span className="eligibility-warn-badge">⚠ Amex limit</span>
                 )}
               </div>
-              <button
-                className={`bank-select-all ${allSelected ? 'active' : someSelected ? 'partial' : ''}`}
-                onClick={() => setLocal(l => {
-                  const ids = bankCards.map(c => c.id);
-                  const next = allSelected
-                    ? l.ownedCards.filter(id => !ids.includes(id))
-                    : [...new Set([...l.ownedCards, ...ids])];
-                  return { ...l, ownedCards: next };
-                })}
-              >
-                {allSelected ? 'Deselect all' : 'Select all'}
-              </button>
             </div>
             <div className="card-grid">
               {bankCards.map(card => {
@@ -181,20 +226,22 @@ function StepCards({ local, setLocal, onNext, onBack }) {
                     className={`card-option ${owned.includes(card.id) ? 'selected' : ''} ${restricted ? 'restricted' : ''}`}
                     onClick={() => toggle(card.id)}>
                     <div className="card-check" />
-                    <div className="card-color-bar" style={{ background: card.color }} />
                     <div className="card-info">
                       <div className="card-name">{card.name}</div>
                       <div className="card-fee-row">
                         <span className={`card-fee-badge ${card.annualFee === 0 ? 'free' : 'paid'}`}>
                           {card.annualFee === 0 ? 'No fee' : `$${card.annualFee}/yr`}
                         </span>
+                        {plaidDetectedCards.includes(card.id) && (
+                          <span className="card-detected-badge">🔗 from bank</span>
+                        )}
                         {restricted && !owned.includes(card.id) && (
                           <span className="card-ineligible-tag">Not eligible</span>
                         )}
                       </div>
                       <div className="card-rates">
                         {(TOP_RATES[card.id] || []).map(r => (
-                          <span key={r} className={`rate-chip ${/[4-9]x|10x/.test(r) ? 'highlight' : ''}`}>{r}</span>
+                          <span key={r} className="rate-chip">{r}</span>
                         ))}
                       </div>
                     </div>
@@ -254,17 +301,56 @@ function StepCards({ local, setLocal, onNext, onBack }) {
         )}
       </div>
 
+      {owned.length === 0 && (
+        <p style={{ fontSize: 13, color: 'var(--gray-400)', marginTop: 12, textAlign: 'center' }}>
+          Select at least one card you currently own to continue.
+        </p>
+      )}
       <div className="wizard-nav">
         <button className="btn btn-secondary" onClick={onBack}>← Back</button>
-        <button className="btn btn-primary" onClick={onNext}>Next: Preferences →</button>
+        <button className="btn btn-primary" onClick={onNext} disabled={owned.length === 0}
+          style={{ opacity: owned.length === 0 ? 0.4 : 1, cursor: owned.length === 0 ? 'not-allowed' : 'pointer' }}>
+          Next: Preferences →</button>
       </div>
     </>
   );
 }
 
+// Cards that earn transferable points (not cashback).
+// Chase UR cards (CFU, CF) are excluded — they need CSR/CSP to transfer,
+// and those are listed directly here.
+const TRANSFER_ELIGIBLE_IDS = new Set(['csr', 'csp', 'amex_gold', 'amex_plat', 'cdc', 'co_venture']);
+
+// Max new paid card applications to recommend at once — more is overwhelming
+const MAX_NEW_APPS = 2;
+
+// Count new paid card applications a tier requires for a given user
+function newAppsNeeded(tier, ownedCards, heldCards) {
+  return tier.cards.filter(cid => {
+    if (ownedCards.includes(cid) || heldCards.includes(cid)) return false;
+    const card = CARDS.find(c => c.id === cid);
+    return card?.annualFee > 0; // $0-fee cards (CFU etc.) don't count as application burden
+  }).length;
+}
+
 // ─── Step 3: Preferences (Redemption + Credits merged) ───────────────────────
 function StepPreferences({ local, setLocal, onNext, onBack }) {
   const { redeemStyle, selectedCredits, ownedCards } = local;
+
+  const canTransfer = ownedCards.some(id => TRANSFER_ELIGIBLE_IDS.has(id));
+
+  const [showAdvanced, setShowAdvanced] = useState(
+    canTransfer && (redeemStyle === 'transfer' || redeemStyle === 'expert')
+  );
+
+  // If user no longer has any transfer-eligible card, reset to portal
+  useEffect(() => {
+    if (!canTransfer && (redeemStyle === 'transfer' || redeemStyle === 'expert')) {
+      setLocal(l => ({ ...l, redeemStyle: 'portal' }));
+      setShowAdvanced(false);
+    }
+  }, [canTransfer]);
+
   const relevantCards = CARDS.filter(c => ownedCards.includes(c.id) && STATEMENT_CREDITS[c.id]);
 
   const toggleCredit = (cardId, creditId) => {
@@ -286,36 +372,62 @@ function StepPreferences({ local, setLocal, onNext, onBack }) {
     return Math.max(0, card.annualFee - credits.filter(c => sel.includes(c.id)).reduce((s, c) => s + c.value, 0));
   };
 
+  const mainStyles   = REDEMPTION_STYLES.filter(s => s.id === 'cashout' || s.id === 'portal');
+  const advStyles    = REDEMPTION_STYLES.filter(s => s.id === 'transfer' || s.id === 'expert');
+
+  const RedemptionBtn = ({ style }) => {
+    const isSel = redeemStyle === style.id;
+    return (
+      <button className={`redemption-option ${isSel ? 'selected' : ''}`}
+        onClick={() => setLocal(l => ({ ...l, redeemStyle: style.id }))}>
+        <div className="redemption-label">
+          <span className="redemption-dot" />
+          <span>{REDEEM_ICONS[style.id]} {style.label}</span>
+        </div>
+        <div className="redemption-desc">{style.description}</div>
+        <div className="redemption-vals">
+          {['Chase', 'Amex', 'Citi', 'CapitalOne'].map(issuer => (
+            style.valuations[issuer] ? (
+              <div key={issuer} className="redemption-val">
+                <span className="issuer">{issuer}</span>
+                <span className="val">{style.valuations[issuer]}¢/pt</span>
+              </div>
+            ) : null
+          ))}
+        </div>
+      </button>
+    );
+  };
+
   return (
     <>
       <h2 className="step-heading">Preferences</h2>
       <p className="step-subheading">How you redeem points determines their value.</p>
 
       <div className="redemption-grid">
-        {REDEMPTION_STYLES.map(style => {
-          const isSel = redeemStyle === style.id;
-          return (
-            <button key={style.id} className={`redemption-option ${isSel ? 'selected' : ''}`}
-              onClick={() => setLocal(l => ({ ...l, redeemStyle: style.id }))}>
-              <div className="redemption-label">
-                <span className="redemption-dot" />
-                <span>{REDEEM_ICONS[style.id]} {style.label}</span>
-              </div>
-              <div className="redemption-desc">{style.description}</div>
-              <div className="redemption-vals">
-                {['Chase', 'Amex', 'Citi', 'CapitalOne'].map(issuer => (
-                  style.valuations[issuer] ? (
-                    <div key={issuer} className="redemption-val">
-                      <span className="issuer">{issuer}</span>
-                      <span className="val">{style.valuations[issuer]}¢/pt</span>
-                    </div>
-                  ) : null
-                ))}
-              </div>
-            </button>
-          );
-        })}
+        {mainStyles.map(style => <RedemptionBtn key={style.id} style={style} />)}
       </div>
+
+      {canTransfer ? (
+        <button className="advanced-toggle" onClick={() => {
+          setShowAdvanced(s => !s);
+          if (showAdvanced && (redeemStyle === 'transfer' || redeemStyle === 'expert')) {
+            setLocal(l => ({ ...l, redeemStyle: 'portal' }));
+          }
+        }}>
+          {showAdvanced ? '▲ Hide advanced options' : '+ I optimize with transfer partners'}
+        </button>
+      ) : (
+        <div className="advanced-toggle-locked">
+          🔒 Transfer partner options require a card that earns transferable points (e.g. Sapphire Reserve, Amex Gold, Citi Double Cash)
+        </div>
+      )}
+
+      {canTransfer && showAdvanced && (
+        <div className="redemption-grid" style={{ marginTop: 12 }}>
+          {advStyles.map(style => <RedemptionBtn key={style.id} style={style} />)}
+        </div>
+      )}
 
       {relevantCards.length > 0 && (
         <>
@@ -392,7 +504,7 @@ function formatRawBonus(card) {
 }
 
 // ─── Recommendation Banner ────────────────────────────────────────────────────
-function RecommendationBanner({ tiers, ownedCards, heldCards = [], totalMonthlySpend, spend, redeemStyle }) {
+function RecommendationBanner({ tiers, displayTierIds, ownedCards, heldCards = [], totalMonthlySpend, spend, redeemStyle, onViewDetails }) {
   // Use 'current' as baseline if it exists, else fall back to 'free'
   const baseline = tiers.find(t => t.id === 'current') || tiers.find(t => t.id === 'free');
   const upgradeTiers = tiers.filter(t => t.id !== 'current' && t.id !== 'free');
@@ -427,11 +539,16 @@ function RecommendationBanner({ tiers, ownedCards, heldCards = [], totalMonthlyS
     return true;
   };
 
-  const achievable = scored.filter(canHitSpend);
+  const achievable = scored.filter(t => canHitSpend(t) && newAppsNeeded(t, ownedCards, heldCards) <= MAX_NEW_APPS);
   const best = achievable.length > 0 ? achievable[0] : scored[0];
-  // Free/current wins if its 3-year total beats the best achievable paid tier
-  const freeIsBest = threeYr(best) <= threeYr(freeTier);
+
+  // Only recommend an upgrade if it clears $75/yr over 3 years per new card application needed.
+  // If you already own all the cards, any positive advantage is worth it (zero friction).
   const newCards = best.cards.filter(cid => !ownedCards.includes(cid));
+  const newCardsNeeded = newCards.filter(cid => !heldCards.includes(cid));
+  const upgradeThreshold = newCardsNeeded.length > 0 ? 75 * 3 : 0;
+  const threeYrAdvVsBaseline = threeYr(best) - threeYr(freeTier);
+  const freeIsBest = threeYrAdvVsBaseline < upgradeThreshold;
 
   // "Spend up" nudge: best out-of-reach tier with a better 3-year total
   const nextUp = scored.find(t => !canHitSpend(t) && threeYr(t) > threeYr(best));
@@ -446,10 +563,11 @@ function RecommendationBanner({ tiers, ownedCards, heldCards = [], totalMonthlyS
       ))
     : 0;
   const nextUpSpendMore = nextUp ? Math.max(0, nextUpMonthlyNeeded - totalMonthlySpend) : 0;
-  const nextUp5yr = nextUp ? nextUp.year1 + nextUp.netPerYear * 4 : 0;
-  const best5yr = best.year1 + best.netPerYear * 4;
+  const nextUp3yr = nextUp ? nextUp.year1 + nextUp.netPerYear * 2 : 0;
+  const best3yr = best.year1 + best.netPerYear * 2;
 
   // Find which categories drive the advantage (best tier rate vs free tier rate)
+  // Also capture the best card name and raw multiplier for narrative use.
   const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
   const catAdvantages = CATEGORIES
     .map(cat => {
@@ -466,61 +584,95 @@ function RecommendationBanner({ tiers, ownedCards, heldCards = [], totalMonthlyS
       }
 
       let bestRate = 0;
+      let bestCardName = null;
+      let bestMultiplier = 0;
       for (const cid of best.cards) {
         const card = CARDS.find(c => c.id === cid);
         if (!card) continue;
         const r = getEffectiveRate(card, cat.id, {}, monthly);
         const v = (style?.valuations[card.issuer] || 1.0) / 100;
-        if (r * v > bestRate) bestRate = r * v;
+        if (r * v > bestRate) {
+          bestRate = r * v;
+          bestMultiplier = r;
+          bestCardName = card.name.replace('Chase ', '').replace('American Express ', 'Amex ').replace('Capital One ', '');
+        }
       }
-
       const annualGain = (bestRate - freeRate) * monthly * 12;
-      return annualGain > 0 ? { cat, monthly, annualGain } : null;
+      return annualGain > 0 ? { cat, monthly, annualGain, bestCardName, bestMultiplier } : null;
     })
     .filter(Boolean)
     .sort((a, b) => b.annualGain - a.annualGain)
     .slice(0, 3);
 
-  // Build a "why" sentence from top driving categories
-  const buildWhySentence = () => {
-    if (catAdvantages.length === 0) return null;
-    const parts = catAdvantages.map(({ cat, monthly, annualGain }) =>
-      `${cat.label.toLowerCase()} (${fmt(monthly)}/mo → +${fmt(annualGain)}/yr)`
-    );
-    if (parts.length === 1) return `Driven by your ${parts[0]}.`;
-    const last = parts.pop();
-    return `Driven by your ${parts.join(', ')} and ${last}.`;
-  };
+  // Format multiplier: whole numbers stay clean (3x), decimals get one place (1.5x)
+  const fmtMult = m => Number.isInteger(m) ? `${m}` : m.toFixed(1);
 
-  // Build a plain-English summary explaining why this tier was picked
+  // Build a conversational summary — lead with WHY, not the numbers
   const buildSummaryText = () => {
-    const monthlyStr = fmt(totalMonthlySpend);
+    const threeYrAdv = (best.year1 + best.netPerYear * 2) - (freeTier.year1 + freeTier.netPerYear * 2);
+    const bonusBridges = best.ongoingAdv < 0 && threeYrAdv > 0;
+
+    // Determine the main driver behind the recommendation
+    const creditsOffsetFee = best.effectiveFee < best.totalFee * 0.5; // credits cut fee in half+
+    const strongEarner = best.ongoingAdv > 200;
+    const bonusDriven = bonusBridges || (best.welcomeBonus > best.effectiveFee);
 
     if (freeIsBest) {
-      const gap = fmt(Math.abs(best.ongoingAdv));
-      const baselineLabel = freeTier.id === 'current' ? 'your current cards' : 'your no-fee cards';
-      return `At ${monthlyStr}/mo, even the best paid option (${best.name}) costs ${gap}/yr more in fees than it earns back in rewards. Stick with ${baselineLabel}.`;
+      if (best.ongoingAdv < 0) {
+        return `At your spending level, the fees on premium cards would outweigh the extra rewards — ${freeTier.id === 'current' ? 'your current wallet' : 'a no-fee setup'} is the smarter play right now.`;
+      }
+      return `${freeTier.id === 'current' ? 'Your current wallet' : 'A no-fee setup'} is already doing the job well at your spending level — the upgrade isn't meaningful enough to justify opening new cards.`;
     }
 
-    // Was a higher tier filtered out because it's out of reach?
-    if (nextUp) {
-      return `At ${monthlyStr}/mo, ${best.name} earns you ${fmt(best.ongoingAdv)}/yr more after fees and is the best combo you can unlock with your current spending. ${nextUp.name} would earn more, but its bonus spend requirements need ${fmt(nextUpMonthlyNeeded)}/mo — more than you currently spend.`;
+    // Build the "why this card wins" opening clause
+    let why = '';
+    if (creditsOffsetFee && strongEarner) {
+      why = `statement credits largely offset the annual fee, and the earning rates on your top categories pull ahead of cheaper alternatives`;
+    } else if (creditsOffsetFee) {
+      why = `statement credits more than cover the annual fee, so you're essentially getting the rewards for free`;
+    } else if (bonusDriven && bonusBridges) {
+      why = `the welcome bonus puts you well ahead in year one, and the ongoing rewards hold their own after that`;
+    } else if (bonusDriven) {
+      why = `a strong welcome bonus combined with solid ongoing rewards makes this the highest-value option over time`;
+    } else if (strongEarner) {
+      why = `the earning rates on your top spend categories outpace everything else in your range`;
+    } else {
+      why = `it offers the best balance of rewards and fees at your spending level`;
     }
 
-    // Most premium achievable tier that scored worse
+    // Build a specific category earnings sentence
+    let categoryDetail = '';
+    if (catAdvantages.length > 0) {
+      const totalGain = catAdvantages.reduce((s, a) => s + a.annualGain, 0);
+      const topCat = catAdvantages[0];
+      const secondCat = catAdvantages[1];
+
+      const fmtTop = fmtMult(topCat.bestMultiplier);
+      const fmtSec = secondCat ? fmtMult(secondCat.bestMultiplier) : '';
+      if (catAdvantages.length === 1) {
+        categoryDetail = ` ${topCat.bestCardName} earns ${fmtTop}x on your ${topCat.cat.label.toLowerCase()} spend — worth ${fmt(topCat.annualGain)}/yr more than the next-best option.`;
+      } else if (catAdvantages.length === 2) {
+        categoryDetail = ` ${topCat.bestCardName}'s ${fmtTop}x on ${topCat.cat.label.toLowerCase()} and ${secondCat.bestCardName}'s ${fmtSec}x on ${secondCat.cat.label.toLowerCase()} drive most of the gap — ${fmt(totalGain)}/yr more at your current spend.`;
+      } else {
+        categoryDetail = ` ${topCat.bestCardName}'s ${fmtTop}x on ${topCat.cat.label.toLowerCase()} and ${secondCat.bestCardName}'s ${fmtSec}x on ${secondCat.cat.label.toLowerCase()} are your biggest earners, with ${fmt(totalGain)}/yr more across your top categories.`;
+      }
+    }
+
+    // Skipped tier note (e.g. "Traveler carries a higher fee without meaningfully better returns")
     const skipped = achievable
       .slice(1)
+      .filter(t => !displayTierIds || displayTierIds.includes(t.id))
       .sort((a, b) => b.effectiveFee - a.effectiveFee)[0];
+    const skippedNote = (!nextUp && skipped && skipped.netPerYear < best.netPerYear)
+      ? ` ${skipped.name} carries a higher fee without meaningfully better returns for your spend profile.`
+      : '';
 
-    if (skipped && skipped.netPerYear < best.netPerYear) {
-      const skippedOngoing = skipped.netPerYear - freeTier.netPerYear;
-      const verdict = skippedOngoing < 0
-        ? `${skipped.name}'s annual fee would cost you ${fmt(Math.abs(skippedOngoing))}/yr more than it earns back`
-        : `${skipped.name} would only net ${fmt(skippedOngoing)}/yr — ${fmt(best.ongoingAdv - skippedOngoing)} less for a higher fee`;
-      return `At ${monthlyStr}/mo, ${best.name} earns you ${fmt(best.ongoingAdv)}/yr more after fees — the best return for what you actually spend. ${verdict}.`;
-    }
+    // Nudge if a higher tier is just out of reach
+    const nudge = nextUp
+      ? ` If you can grow your monthly spend to ${fmt(nextUpMonthlyNeeded)}, ${nextUp.name} unlocks even more value.`
+      : '';
 
-    return `At ${monthlyStr}/mo, ${best.name} earns you ${fmt(best.ongoingAdv)}/yr more after fees than your current setup — without spending a dollar more.`;
+    return `${best.name} is your best option — ${why}.${categoryDetail}${skippedNote}${nudge}`;
   };
 
   const summaryText = buildSummaryText();
@@ -532,6 +684,9 @@ function RecommendationBanner({ tiers, ownedCards, heldCards = [], totalMonthlyS
         <div className="rec-content">
           <div className="rec-headline">{freeTier.id === 'current' ? 'Your current wallet is the right call' : 'Your free wallet is the right call'}</div>
           <div className="rec-detail">{summaryText}</div>
+          {onViewDetails && (
+            <button className="rec-view-btn" onClick={onViewDetails}>Compare options below ↓</button>
+          )}
         </div>
       </div>
     );
@@ -542,19 +697,16 @@ function RecommendationBanner({ tiers, ownedCards, heldCards = [], totalMonthlyS
   return (
     <div className="rec-banner rec-paid">
       {/* Summary: plain-English spend-aware rationale */}
-      {summaryText && <div className="rec-summary">{summaryText}</div>}
+      {summaryText && (
+        <div className="rec-summary">
+          <span className="rec-summary-label">Bottom line</span>
+          {summaryText}
+        </div>
+      )}
 
-      {/* Row 1: headline + KPI chips */}
+      {/* Row 1: headline */}
       <div className="rec-top">
         <div className="rec-headline">Upgrade to <strong>{best.name}</strong></div>
-        <div className="rec-kpis">
-          {best.ongoingAdv > 0 && (
-            <span className="rec-kpi">{fmt(best.ongoingAdv)}/yr ongoing</span>
-          )}
-          {best.welcomeBonus > 0 && best.year1Adv > 0 && (
-            <span className="rec-kpi rec-kpi-accent">{fmt(best.year1Adv)} in Year 1</span>
-          )}
-        </div>
       </div>
 
       {/* Row 2: per-card application rows */}
@@ -610,498 +762,63 @@ function RecommendationBanner({ tiers, ownedCards, heldCards = [], totalMonthlyS
       )}
 
       {/* Spend-up nudge: show what they'd unlock by spending a bit more */}
-      {nextUp && nextUpSpendMore > 0 && (nextUp5yr - best5yr) > 50 && (
+      {nextUp && nextUpSpendMore > 0 && (nextUp3yr - best3yr) > 50 && (
         <div className="rec-spendUp">
           <span className="rec-spendUp-icon">↑</span>
           <span className="rec-spendUp-text">
             Spend <strong>{fmt(nextUpSpendMore)}/mo more</strong> and {nextUp.name} becomes reachable
-            — that's <strong>{fmt(nextUp5yr - best5yr)} more over 5 years</strong>.
+            — that's <strong>{fmt(nextUp3yr - best3yr)} more over 3 years</strong>.
           </span>
         </div>
+      )}
+
+      {onViewDetails && (
+        <button className="rec-view-btn" onClick={onViewDetails}>View wallet options ↓</button>
       )}
 
     </div>
   );
 }
 
-// ─── Net Advantage Chart ──────────────────────────────────────────────────────
-function NetAdvantageChart({ freeData, tierData, tierName, welcomeBonus = 0 }) {
-  const [hoverYear, setHoverYear] = useState(null);
 
-  const years = [1, 2, 3, 4, 5];
-  const cumIdx = [11, 23, 35, 47, 59];
-
-  // Per-year net (not cumulative)
-  const freeAnnual = cumIdx.map((m, i) => i === 0 ? freeData[m] : freeData[m] - freeData[cumIdx[i - 1]]);
-  const tierAnnual = cumIdx.map((m, i) => i === 0 ? tierData[m] : tierData[m] - tierData[cumIdx[i - 1]]);
-
-  // Steady-state = avg of years 2–5 (yr 1 has bonus spike)
-  const freeRef    = (freeAnnual[1] + freeAnnual[2] + freeAnnual[3] + freeAnnual[4]) / 4;
-  const tierSteady = (tierAnnual[1] + tierAnnual[2] + tierAnnual[3] + tierAnnual[4]) / 4;
-  const ongoingAdv  = tierSteady - freeRef;
-  const yr5TotalAdv = tierData[59] - freeData[59];
-
-  const fmtK = v => Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}k` : `$${Math.round(Math.abs(v))}`;
-
-  // Layout
-  const W = 540, H = 200;
-  const padL = 58, padR = 16, padT = 20, padB = 32;
-  const plotW = W - padL - padR;
-  const plotH = H - padT - padB;
-
-  const allVals = [...tierAnnual, freeRef, 0];
-  const maxVal  = Math.max(...allVals) * 1.22;
-  const minVal  = Math.min(0, ...tierAnnual, freeRef) * 1.1;
-  const range   = maxVal - minVal || 1;
-
-  const yOf   = v  => padT + plotH * (1 - (v - minVal) / range);
-  const refY  = yOf(freeRef);
-  const groupW = plotW / 5;
-  const barW   = groupW * 0.48;
-  const cx     = i => padL + i * groupW + groupW / 2;
-
-  // Y ticks — skip any within 14px of the reference line (avoid collision)
-  const tickStep = Math.ceil((maxVal - minVal) / 4 / 100) * 100 || 100;
-  const yTicks = [];
-  for (let v = Math.floor(minVal / tickStep) * tickStep; v <= maxVal + tickStep / 2; v += tickStep) {
-    const rounded = Math.round(v / tickStep) * tickStep;
-    if (Math.abs(yOf(rounded) - refY) > 14) yTicks.push(rounded);
-  }
-
-  return (
-    <div className="net-chart-wrap">
-      {/* Plain-English summary */}
-      <p className="net-chart-summary">
-        {ongoingAdv > 0
-          ? <><strong>{fmtK(ongoingAdv)}/yr more</strong> than Free on an ongoing basis</>
-          : <>Free earns <strong>{fmtK(Math.abs(ongoingAdv))}/yr more</strong> on an ongoing basis</>}
-        {welcomeBonus > 0 && <> · Year&nbsp;1 boosted by a <strong>{fmtK(welcomeBonus)} welcome bonus</strong></>}
-      </p>
-
-      <svg
-        viewBox={`0 0 ${W} ${H}`}
-        style={{ width: '100%', height: 'auto', display: 'block' }}
-        onMouseLeave={() => setHoverYear(null)}
-      >
-        {/* Subtle grid */}
-        {yTicks.map((v, i) => (
-          <line key={i} x1={padL} y1={yOf(v)} x2={W - padR} y2={yOf(v)}
-            stroke="#f1f1f1" strokeWidth="1" />
-        ))}
-
-        {/* Free reference line */}
-        <line x1={padL} y1={refY} x2={W - padR} y2={refY}
-          stroke="#94a3b8" strokeWidth="1.5" strokeDasharray="5 4" />
-        {/* Reference line pill label on left axis */}
-        <rect x={0} y={refY - 9} width={padL - 4} height={18} rx="4" fill="#f8fafc" />
-        <text x={padL - 8} y={refY + 4} textAnchor="end" fontSize="9" fontWeight="600" fill="#64748b">
-          Free
-        </text>
-
-        {/* Bars */}
-        {years.map((yr, i) => {
-          const v      = tierAnnual[i];
-          const isAbove = v >= freeRef;
-          const isHov  = hoverYear === i;
-          const isYr1  = i === 0 && welcomeBonus > 0;
-          const barTop = yOf(Math.max(v, 0));
-          const barBot = yOf(0);
-          const bH     = Math.max(3, barBot - barTop);
-
-          // Label: inside (white) if bar tall enough, else above with a floor so it never clips
-          const labelInside = bH > 26;
-          const rawLabelY   = labelInside ? barTop + bH / 2 + 4 : barTop - 7;
-          const labelY      = Math.max(padT + 12, rawLabelY);
-          const labelFill   = labelInside ? 'white' : (isAbove ? '#3C3489' : '#dc2626');
-
-          return (
-            <g key={yr} onMouseEnter={() => setHoverYear(i)} style={{ cursor: 'default' }}>
-              {/* Hover tray */}
-              {isHov && (
-                <rect x={cx(i) - barW / 2 - 5} y={padT - 2}
-                  width={barW + 10} height={plotH + 4}
-                  fill="#f8fafc" rx="4" />
-              )}
-
-              {/* Bar */}
-              <rect
-                x={cx(i) - barW / 2} y={barTop}
-                width={barW} height={bH}
-                fill={isAbove ? '#3C3489' : '#dc2626'}
-                opacity={isYr1 ? 0.68 : isHov ? 1 : 0.88}
-                rx="3"
-              />
-
-              {/* Value label */}
-              <text x={cx(i)} y={labelY}
-                textAnchor="middle" fontSize="10" fontWeight="700" fill={labelFill}>
-                {fmtK(v)}
-              </text>
-
-              {/* "w/ bonus" sub-label below year label for yr 1 */}
-              {isYr1 && (
-                <text x={cx(i)} y={H - padB + 24}
-                  textAnchor="middle" fontSize="9" fill="#6366f1">
-                  +{fmtK(welcomeBonus)} bonus
-                </text>
-              )}
-
-              {/* Hover tooltip */}
-              {isHov && (() => {
-                const tooltipW = 136;
-                const advVsFree = v - freeAnnual[i];
-                const rows = [
-                  { label: `${tierName}`, val: fmtK(v), color: '#3C3489' },
-                  { label: 'Free Wallet', val: fmtK(freeAnnual[i]), color: '#64748b' },
-                  ...(isYr1 ? [{ label: 'incl. bonus', val: fmtK(welcomeBonus), color: '#6366f1' }] : []),
-                  { label: 'vs Free', val: `${advVsFree >= 0 ? '+' : '−'}${fmtK(Math.abs(advVsFree))}`, color: advVsFree >= 0 ? '#1D9E75' : '#dc2626' },
-                ];
-                const tx = i < 3 ? cx(i) + barW / 2 + 6 : cx(i) - barW / 2 - tooltipW - 6;
-                const ty = padT + 2;
-                const th = 18 + rows.length * 17;
-                return (
-                  <g style={{ pointerEvents: 'none' }}>
-                    <rect x={tx} y={ty} width={tooltipW} height={th} rx="7"
-                      fill="white" stroke="#e2e8f0" strokeWidth="1"
-                      style={{ filter: 'drop-shadow(0 2px 8px rgba(0,0,0,0.09))' }} />
-                    <text x={tx + 10} y={ty + 13} fontSize="10" fontWeight="700" fill="#334155">
-                      Year {yr} — annual
-                    </text>
-                    <line x1={tx + 8} y1={ty + 17} x2={tx + tooltipW - 8} y2={ty + 17} stroke="#f1f5f9" strokeWidth="1" />
-                    {rows.map((r, ri) => (
-                      <g key={ri}>
-                        <text x={tx + 10} y={ty + 29 + ri * 17} fontSize="10" fill="#94a3b8">{r.label}</text>
-                        <text x={tx + tooltipW - 8} y={ty + 29 + ri * 17} fontSize="10" fill={r.color} fontWeight="600" textAnchor="end">{r.val}</text>
-                      </g>
-                    ))}
-                  </g>
-                );
-              })()}
-
-              {/* X axis label */}
-              <text x={cx(i)} y={H - padB + 14}
-                textAnchor="middle" fontSize="11" fill="#64748b" fontWeight="500">
-                Yr {yr}
-              </text>
-            </g>
-          );
-        })}
-
-        {/* Y axis value labels (skip ticks near ref line) */}
-        {yTicks.map((v, i) => (
-          <text key={i} x={padL - 6} y={yOf(v) + 4}
-            textAnchor="end" fontSize="10" fill="#94a3b8">
-            {fmtK(v)}
-          </text>
-        ))}
-      </svg>
-
-      {/* HTML legend — flexbox centers it naturally */}
-      <div className="net-chart-legend">
-        <span className="net-chart-legend-item">
-          <span className="net-chart-swatch" style={{ background: '#3C3489' }} />
-          {tierName} annual net
-        </span>
-        <span className="net-chart-legend-item">
-          <span className="net-chart-dash" />
-          Free Wallet
-        </span>
-        {welcomeBonus > 0 && (
-          <span className="net-chart-legend-item">
-            <span className="net-chart-swatch" style={{ background: '#6366f1', opacity: 0.7 }} />
-            Yr 1 incl. bonus
-          </span>
-        )}
-      </div>
-
-      <p className="chart-assumption-note">Net of annual fees · Assumes optimal card routing per category</p>
-
-      {/* Stat pills — centered */}
-      <div className="net-chart-pills">
-        <div className="chart-stat-pill">
-          <span className="chart-stat-label">Ongoing advantage</span>
-          <span className="chart-stat-value" style={{ color: ongoingAdv >= 0 ? '#1D9E75' : '#dc2626' }}>
-            {ongoingAdv >= 0 ? '+' : '−'}{fmtK(Math.abs(ongoingAdv))}/yr vs Free
-          </span>
-        </div>
-        {welcomeBonus > 0 && (
-          <div className="chart-stat-pill">
-            <span className="chart-stat-label">Year 1 (with bonus)</span>
-            <span className="chart-stat-value" style={{ color: '#3C3489' }}>
-              {fmtK(tierAnnual[0])}
-            </span>
-          </div>
-        )}
-        <div className="chart-stat-pill">
-          <span className="chart-stat-label">5-yr total vs Free</span>
-          <span className="chart-stat-value" style={{ color: yr5TotalAdv >= 0 ? '#1D9E75' : '#dc2626' }}>
-            {yr5TotalAdv >= 0 ? '+' : '−'}{fmtK(Math.abs(yr5TotalAdv))}
-          </span>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// Compute welcome bonus discounted by spend feasibility.
-// Each new card's dollar bonus is multiplied by how achievable the spend req is.
-// A $900 bonus requiring $4k/3mo is worth $900 if you spend $2k/mo (covers it),
-// but only $450 if you spend $1k/mo (50% coverage).
-function adjustedWelcomeBonus(tierCards, ownedCards, heldCards, totalMonthlySpend, redeemStyle) {
-  const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
-  let total = 0;
-  for (const cardId of tierCards) {
-    if (ownedCards.includes(cardId) || heldCards.includes(cardId)) continue;
-    const card = CARDS.find(c => c.id === cardId);
-    if (!card?.welcomeBonus?.amount) continue;
-    const wb = card.welcomeBonus;
-    const dollarBonus = wb.isCashbackMatch ? 0 // dynamic; ignore in scoring
-      : wb.type === 'cashback' ? wb.amount
-      : Math.round(wb.amount * ((style?.valuations[card.issuer] || 1.0) / 100));
-    const feasibility = wb.spend > 0 && totalMonthlySpend > 0
-      ? Math.min(1, (totalMonthlySpend * wb.months) / wb.spend)
-      : 1;
-    total += dollarBonus * feasibility;
-  }
-  return total;
-}
-
-function buildBonusItems(cardIds, ownedCards, heldCards, redeemStyle) {
-  const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
-  return cardIds
-    .filter(cid => !ownedCards.includes(cid) && !heldCards.includes(cid))
-    .map(cid => {
-      const card = CARDS.find(c => c.id === cid);
-      const raw = formatRawBonus(card);
-      if (!raw || !card?.welcomeBonus?.amount) return null;
-      const rawDollar = card.welcomeBonus.type === 'cashback'
-        ? card.welcomeBonus.amount
-        : Math.round(card.welcomeBonus.amount * ((style?.valuations[card.issuer] || 1.0) / 100));
-      const shortName = card.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '');
-      return { name: shortName, raw, dollar: fmt(rawDollar), rawDollar };
-    })
-    .filter(Boolean);
-}
-
-// ─── Bonus breakdown popover ──────────────────────────────────────────────────
-function BonusBreakdown({ items }) {
-  const [visible, setVisible] = useState(false);
-  if (!items || items.length === 0) return null;
-  return (
-    <span
-      className="bonus-breakdown-wrap"
-      onMouseEnter={() => setVisible(true)}
-      onMouseLeave={() => setVisible(false)}
-    >
-      <span className="cmp-tooltip-icon">?</span>
-      {visible && (
-        <span className="bonus-breakdown-pop">
-          {items.map((item, i) => (
-            <span key={i} className="bonus-breakdown-row">
-              <span className="bonus-breakdown-name">{item.name}</span>
-              <span className="bonus-breakdown-val">{item.raw} <span className="bonus-breakdown-dol">({item.dollar})</span></span>
-            </span>
-          ))}
-          {items.length > 1 && (
-            <span className="bonus-breakdown-total">
-              <span>Total</span>
-              <span>{fmt(items.reduce((s, i) => s + i.rawDollar, 0))}</span>
-            </span>
-          )}
-        </span>
-      )}
-    </span>
-  );
-}
-
-// ─── Side-by-Side Comparison ──────────────────────────────────────────────────
-function TierComparison({ tiers, defaultA, defaultB, totalMonthlySpend, ownedCards = [], heldCards = [], redeemStyle = 'portal' }) {
-  const [idA, setIdA] = useState(defaultA ?? tiers[0]?.id);
-  const [idB, setIdB] = useState(defaultB ?? tiers[2]?.id ?? tiers[1]?.id);
-  const tA = tiers.find(t => t.id === idA);
-  const tB = tiers.find(t => t.id === idB);
-  if (!tA || !tB) return null;
-
-  // 3-year totals: welcome bonus counts once (already in year1), then netPerYear × 2 more
-  const threeYearA = tA.year1 + tA.netPerYear * 2;
-  const threeYearB = tB.year1 + tB.netPerYear * 2;
-  const threeYearDelta = threeYearB - threeYearA; // positive → B wins
-
-  // Winner determined by 3-year total
-  const winner3yr = Math.abs(threeYearDelta) < 1 ? null : threeYearDelta > 0 ? tB : tA;
-  const annualDelta = tB.netPerYear - tA.netPerYear; // positive → B better annually
-
-  // Break-even: how many months until the cumulative advantage crosses zero
-  // cumX[m] = welcomeBonus + netPerYear * m/12
-  let breakevenMonth = null;
-  if (winner3yr) {
-    const [win, lose] = threeYearDelta > 0 ? [tB, tA] : [tA, tB];
-    for (let m = 1; m <= 60; m++) {
-      const cumWin  = win.welcomeBonus  + win.netPerYear  * m / 12;
-      const cumLose = lose.welcomeBonus + lose.netPerYear * m / 12;
-      if (cumWin > cumLose) { breakevenMonth = m; break; }
-    }
-  }
-
-  const redeemLabel = REDEMPTION_STYLES.find(r => r.id === (tA.redeemStyle || tB.redeemStyle))?.label || 'your redemption style';
-
-  const metrics = [
-    {
-      label: 'Annual Earnings',
-      tooltip: 'The best card in this wallet for each spending category, multiplied by your monthly spend and point valuation. Assumes you always use the highest-earning card for each purchase.',
-      a: tA.earnings, b: tB.earnings, fmt: fmt,
-    },
-    {
-      label: 'Effective Fee',
-      tooltip: 'Total annual fees minus any statement credits you selected (e.g. $120 Amex dining credit). This is your real out-of-pocket cost after offsets.',
-      a: -tA.effectiveFee, b: -tB.effectiveFee,
-      fmt: v => v === 0 ? '$0' : `−${fmt(Math.abs(v))}`,
-      higherWins: false,
-    },
-    {
-      label: 'Net / Year',
-      tooltip: 'Annual Earnings minus Effective Fee. What you actually keep each year on an ongoing basis — the most honest apples-to-apples number.',
-      a: tA.netPerYear, b: tB.netPerYear, fmt: fmt,
-    },
-    {
-      label: 'Welcome Bonus',
-      tooltip: 'One-time signup bonus for new cards only — not counted for cards you already own. Converted to dollars at your selected redemption style. Requires hitting the minimum spend within the offer window.',
-      a: tA.welcomeBonus, b: tB.welcomeBonus,
-      fmt: v => v > 0 ? fmt(v) : '—',
-      bonusItemsA: buildBonusItems(tA.cards, ownedCards, heldCards, redeemStyle),
-      bonusItemsB: buildBonusItems(tB.cards, ownedCards, heldCards, redeemStyle),
-    },
-    {
-      label: 'Year 1 Total',
-      tooltip: 'Net/Year plus the welcome bonus. Your best-case first year, assuming you hit the minimum spend for every signup bonus.',
-      a: tA.year1, b: tB.year1, fmt: fmt,
-    },
-    {
-      label: '3-Year Total',
-      tooltip: 'Year 1 Total plus Net/Year for years 2–3. Bonuses counted once. Assumes your spending stays consistent — adjust the spend inputs to model changes.',
-      a: threeYearA, b: threeYearB, fmt: fmt,
-      highlight: true,
-    },
-  ];
-
-  return (
-    <div className="tier-comparison">
-      <h3 className="comparison-heading">Compare Wallets</h3>
-      <div className="comparison-selectors">
-        <select value={idA} onChange={e => setIdA(e.target.value)} className="comparison-select">
-          {tiers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
-        <span className="comparison-vs">vs</span>
-        <select value={idB} onChange={e => setIdB(e.target.value)} className="comparison-select">
-          {tiers.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
-      </div>
-
-      <div className="comparison-table">
-        {/* Column headers */}
-        <div className="comparison-row comparison-header">
-          <div className="comparison-metric" />
-          <div className={`comparison-col-header ${threeYearA > threeYearB ? 'winner' : ''}`}>{tA.name}</div>
-          <div className={`comparison-col-header ${threeYearB > threeYearA ? 'winner' : ''}`}>{tB.name}</div>
-        </div>
-
-        {/* Cards row */}
-        <div className="comparison-row">
-          <div className="comparison-metric">Cards</div>
-          <div className="comparison-cell">
-            {tA.cards.map(cid => {
-              const c = CARDS.find(x => x.id === cid);
-              return c ? <span key={cid} className="comp-pill">{c.name.replace('Chase ', '').replace('Amex ', '')}</span> : null;
-            })}
-          </div>
-          <div className="comparison-cell">
-            {tB.cards.map(cid => {
-              const c = CARDS.find(x => x.id === cid);
-              return c ? <span key={cid} className="comp-pill">{c.name.replace('Chase ', '').replace('Amex ', '')}</span> : null;
-            })}
-          </div>
-        </div>
-
-        {/* Metric rows */}
-        {metrics.map(m => {
-          const higherWins = m.higherWins !== false;
-          const aWins = higherWins ? m.a > m.b : m.a < m.b;
-          const bWins = higherWins ? m.b > m.a : m.b < m.a;
-          return (
-            <div key={m.label} className={`comparison-row${m.highlight ? ' comparison-row-highlight' : ''}`}>
-              <div className="comparison-metric">
-                <span className="comparison-metric-label">
-                  {m.label}
-                  {m.tooltip && (
-                    <span className="cmp-tooltip-wrap">
-                      <span className="cmp-tooltip-icon">?</span>
-                      <span className="cmp-tooltip-box">
-                        {m.tooltip.split('\n').map((line, i) => (
-                          <span key={i} style={{ display: 'block' }}>{line}</span>
-                        ))}
-                      </span>
-                    </span>
-                  )}
-                </span>
-                {m.note && <span className="comparison-note">{m.note}</span>}
-              </div>
-              <div className={`comparison-cell ${aWins ? 'cell-winner' : bWins ? 'cell-loser' : ''}`}>
-                {aWins && <span className="cell-check">✓</span>}
-                {m.fmt(m.a)}
-                {m.bonusItemsA && <BonusBreakdown items={m.bonusItemsA} />}
-              </div>
-              <div className={`comparison-cell ${bWins ? 'cell-winner' : aWins ? 'cell-loser' : ''}`}>
-                {bWins && <span className="cell-check">✓</span>}
-                {m.fmt(m.b)}
-                {m.bonusItemsB && <BonusBreakdown items={m.bonusItemsB} />}
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Aha callout */}
-      {winner3yr ? (
-        <div className="comparison-aha">
-          <div className="comparison-aha-left">
-            <div className="comparison-aha-label">3-year advantage</div>
-            <div className="comparison-aha-number">{fmt(Math.abs(threeYearDelta))}</div>
-            <div className="comparison-aha-name">more with {winner3yr.name}</div>
-          </div>
-          <div className="comparison-aha-pills">
-            {Math.abs(annualDelta) >= 1 && (
-              <span className="comparison-aha-pill">
-                {fmt(Math.abs(annualDelta))}/yr ongoing edge
-              </span>
-            )}
-            {winner3yr.welcomeBonus > 0 && (
-              <span className="comparison-aha-pill">
-                {fmt(winner3yr.welcomeBonus)} welcome bonus (Year 1)
-              </span>
-            )}
-          </div>
-        </div>
-      ) : (
-        <div className="comparison-verdict tied">These wallets perform equally at your spend level</div>
-      )}
-
-      {/* Footnote */}
-      <p className="comparison-footnote">
-        Projections assume your{totalMonthlySpend > 0 ? ` ${fmt(totalMonthlySpend)}/mo` : ''} spending pattern stays consistent over 3 years.
-        Welcome bonuses are shown at full value in Year 1 — actual payout depends on hitting the minimum spend requirement within the offer window.
-        Point valuations reflect your selected redemption style.
-      </p>
-    </div>
-  );
-}
 
 // ─── Custom Combo Builder ─────────────────────────────────────────────────────
+const CHASE_UR_UNLOCKERS_UI = new Set(['csr', 'csp']);
+
 function CustomComboBuilder({ spend, selectedCredits, redeemStyle, heldCards, activationStatus, currentTier }) {
   const [customCards, setCustomCards] = useState([]);
+  // Track CFU cards that were auto-added (so we can auto-remove them)
+  const [autoAdded, setAutoAdded] = useState(new Set());
 
-  const toggle = id => setCustomCards(prev =>
-    prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id]
-  );
+  const toggle = id => {
+    setCustomCards(prev => {
+      const next = prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id];
+
+      // When adding CSR/CSP: auto-add CFU if not already present
+      if (!prev.includes(id) && CHASE_UR_UNLOCKERS_UI.has(id)) {
+        if (!next.includes('cfu')) {
+          setAutoAdded(a => new Set([...a, 'cfu']));
+          return [...next, 'cfu'];
+        }
+      }
+
+      // When removing CSR/CSP: if CFU was auto-added and no other unlocker remains, remove it
+      if (prev.includes(id) && CHASE_UR_UNLOCKERS_UI.has(id)) {
+        const remainingUnlockers = next.filter(c => CHASE_UR_UNLOCKERS_UI.has(c));
+        if (remainingUnlockers.length === 0) {
+          setAutoAdded(a => { const n = new Set(a); n.delete('cfu'); return n; });
+          return next.filter(c => c !== 'cfu' || !autoAdded.has('cfu'));
+        }
+      }
+
+      // If user manually adds CFU, it's no longer auto-managed
+      if (!prev.includes('cfu') && id === 'cfu') {
+        setAutoAdded(a => { const n = new Set(a); n.delete('cfu'); return n; });
+      }
+
+      return next;
+    });
+  };
 
   const earnings   = customCards.length > 0 ? calculateWalletEarnings(customCards, spend, activationStatus, redeemStyle) : 0;
   const effectiveFee = customCards.reduce((s, id) => s + calculateEffectiveFee(id, selectedCredits), 0);
@@ -1139,11 +856,13 @@ function CustomComboBuilder({ spend, selectedCredits, redeemStyle, heldCards, ac
           const sel = customCards.includes(card.id);
           return (
             <button key={card.id}
-              className={`custom-chip ${sel ? 'selected' : ''}`}
-              onClick={() => toggle(card.id)}>
+              className={`custom-chip ${sel ? 'selected' : ''} ${autoAdded.has(card.id) ? 'auto-added' : ''}`}
+              onClick={() => toggle(card.id)}
+              title={autoAdded.has(card.id) ? 'Auto-added — pairs with your CSR/CSP to unlock 1.5x on all spend' : undefined}>
               <span className="custom-chip-dot" style={{ background: card.color }} />
               <span className="custom-chip-name">
                 {card.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '')}
+                {autoAdded.has(card.id) && <span className="custom-chip-auto"> ✦</span>}
               </span>
               {card.annualFee > 0 && <span className="custom-chip-fee">${card.annualFee}</span>}
             </button>
@@ -1192,16 +911,337 @@ function CustomComboBuilder({ spend, selectedCredits, redeemStyle, heldCards, ac
 }
 
 // ─── Results ──────────────────────────────────────────────────────────────────
-function WalletResults({ local, onRestart, onGoToStep }) {
+// ─── TierCard ─────────────────────────────────────────────────────────────────
+function TierCard({ tier, initialCredits, isCurrent, isBest, isOutOfReach, tooManyApps, isExpanded, onToggleExpand, tierCardRef, ownedCards, heldCards, activationStatus, spend, redeemStyle, baseline, newCardIds, totalMonthlySpend }) {
+  const [localCredits, setLocalCredits] = useState(initialCredits);
+
+  const toggleCredit = (cardId, creditId) => {
+    setLocalCredits(prev => {
+      const current = prev[cardId] || [];
+      const next = current.includes(creditId)
+        ? current.filter(id => id !== creditId)
+        : [...current, creditId];
+      return { ...prev, [cardId]: next };
+    });
+  };
+
+  // Recompute fee/net live from localCredits
+  const localEffectiveFee = tier.cards.reduce((s, id) => s + calculateEffectiveFee(id, localCredits), 0);
+  const localNetPerYear = tier.earnings - localEffectiveFee;
+  const localYear1 = localNetPerYear + tier.welcomeBonus;
+  const totalCreditValue = tier.cards.reduce((sum, cid) => {
+    const available = STATEMENT_CREDITS[cid] || [];
+    const applied = localCredits[cid] || [];
+    return sum + available.filter(c => applied.includes(c.id)).reduce((s, c) => s + c.value, 0);
+  }, 0);
+
+  // Benefit chips for collapsed header — show categories earning 2x+, plus a catch-all chip
+  // if a card in the tier earns a flat rate on all categories (e.g. CFU 1.5x, WFAC 2x)
+  const tierBenefits = CATEGORIES
+    .map(cat => {
+      let best = 0;
+      for (const cid of tier.cards) {
+        const card = CARDS.find(c => c.id === cid);
+        if (!card) continue;
+        const r = getEffectiveRate(card, cat.id, activationStatus, parseFloat(spend[cat.id]) || 0);
+        if (r > best) best = r;
+      }
+      return best >= 2 ? { cat, rate: best } : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.rate - a.rate)
+    .slice(0, 3);
+
+  // Catch-all chip: find the best baseline rate across wallet cards.
+  // Uses the minimum rate per card (e.g. CFU has 3x dining but 1.5x on everything else → baseline 1.5x)
+  const catchAllChip = (() => {
+    let bestBaseline = 0;
+    for (const cid of tier.cards) {
+      const card = CARDS.find(c => c.id === cid);
+      if (!card) continue;
+      const baseline = Math.min(...Object.values(card.rates));
+      if (baseline > bestBaseline) bestBaseline = baseline;
+    }
+    // Only show if the baseline is above 1x and below the lowest named tier benefit
+    const lowestBenefit = tierBenefits.length > 0 ? tierBenefits[tierBenefits.length - 1].rate : Infinity;
+    if (bestBaseline > 1 && bestBaseline < lowestBenefit) return bestBaseline;
+    return null;
+  })();
+
+  const rdStyle = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+
+  return (
+    <div
+      ref={tierCardRef}
+      className={`wallet-tier ${isCurrent ? 'tier-current' : ''} ${isBest ? 'best' : ''} ${isExpanded ? 'expanded' : ''}`}
+    >
+      {/* ── Collapsed header ── */}
+      <div className="wt-header" onClick={onToggleExpand}>
+        <div className="wt-left">
+          <div className="wt-name">
+            {tier.name}
+            {isCurrent && <span className="badge-current">CURRENT</span>}
+            {!isCurrent && isBest && <span className="badge-best">BEST</span>}
+            {tooManyApps && <span className="badge-future">LONG-TERM GOAL</span>}
+            {!tooManyApps && isOutOfReach && <span className="badge-locked">↑ SPEND MORE</span>}
+          </div>
+          {tier.description && <div className="wt-description">{tier.description}</div>}
+          <div className="wt-pills">
+            {tier.cards.map(cid => {
+              const card = CARDS.find(c => c.id === cid);
+              const owns = ownedCards.includes(cid);
+              return card ? (
+                <span key={cid} className={`wt-pill ${owns ? 'wt-pill-own' : 'wt-pill-new'}`}>
+                  {card.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '')}
+                </span>
+              ) : null;
+            })}
+          </div>
+          {(tierBenefits.length > 0 || catchAllChip) && (
+            <div className="wt-benefits">
+              {tierBenefits.map(({ cat, rate }) => (
+                <span key={cat.id} className="wt-benefit">
+                  {rate % 1 === 0 ? rate : rate.toFixed(1)}x {cat.label.toLowerCase()}
+                </span>
+              ))}
+              {catchAllChip && (
+                <span className="wt-benefit wt-benefit-flat">
+                  {catchAllChip % 1 === 0 ? catchAllChip : catchAllChip.toFixed(1)}x everything else
+                </span>
+              )}
+            </div>
+          )}
+        </div>
+        <div className="wt-right">
+          <div className="wt-kpi">
+            <span className="wt-kpi-val">{fmt(localNetPerYear)}</span>
+            <span className="wt-kpi-label">net/yr</span>
+            {totalCreditValue > 0 && (
+              <span className="wt-kpi-credits">incl. ${totalCreditValue} in credits</span>
+            )}
+          </div>
+          {!isCurrent && baseline && (() => {
+            const baselineNet = baseline.earnings - baseline.effectiveFee;
+            const baselineY1 = baselineNet + (baseline.welcomeBonus || 0);
+            const delta3yr = (localYear1 + localNetPerYear * 2) - (baselineY1 + baselineNet * 2);
+            return (
+              <div className={`wt-delta ${delta3yr >= 0 ? 'pos' : 'neg'}`}>
+                {delta3yr >= 0 ? '+' : '−'}{fmt(Math.abs(delta3yr))} over 3 yrs
+              </div>
+            );
+          })()}
+          {isCurrent && <div className="wt-delta pos">your baseline</div>}
+          <span className="wt-chevron">{isExpanded ? '▲' : '▼'}</span>
+        </div>
+      </div>
+
+      {/* ── Expanded detail ── */}
+      {isExpanded && (
+        <div className="wt-body">
+
+          {/* Earnings by category */}
+          <div className="wt-section-label">Earnings by category</div>
+          <div className="wt-breakdown">
+            {CATEGORIES.map(cat => {
+              const monthly = parseFloat(spend[cat.id]) || 0;
+              if (!monthly) return null;
+              let bestCard = null, bestRate = 0;
+              for (const cid of tier.cards) {
+                const card = CARDS.find(c => c.id === cid);
+                if (!card) continue;
+                const r = getEffectiveRate(card, cat.id, activationStatus, monthly);
+                if (r > bestRate) { bestRate = r; bestCard = card; }
+              }
+              if (!bestCard) return null;
+              const val = (rdStyle?.valuations[bestCard.issuer] || 1.0) / 100;
+              const annual = monthly * 12 * bestRate * val;
+              const shortName = bestCard.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '');
+              return (
+                <div key={cat.id} className="wt-breakdown-row wt-breakdown-cat">
+                  <span className="wt-breakdown-cat-label">
+                    {cat.icon} {cat.label}
+                    <span className="wt-breakdown-cat-detail">{Number.isInteger(bestRate) ? bestRate : bestRate.toFixed(1)}x · {shortName}</span>
+                  </span>
+                  <span>{fmt(annual)}/yr</span>
+                </div>
+              );
+            }).filter(Boolean)}
+          </div>
+
+          {/* Annual fees + interactive credit pills */}
+          {tier.cards.some(cid => (CARDS.find(c => c.id === cid)?.annualFee || 0) > 0) && (
+            <>
+              <div className="wt-section-label" style={{ marginTop: 16 }}>Annual fees</div>
+              {tier.cards.map(cid => {
+                const card = CARDS.find(c => c.id === cid);
+                if (!card || card.annualFee === 0) return null;
+                const allCredits = STATEMENT_CREDITS[cid] || [];
+                if (allCredits.length === 0) return null;
+                const appliedIds = localCredits[cid] || [];
+                const creditSum = allCredits.filter(cr => appliedIds.includes(cr.id)).reduce((s, cr) => s + cr.value, 0);
+                const effective = card.annualFee - creditSum;
+                const shortName = card.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '');
+                return (
+                  <div key={cid} className="wt-credit-card-block">
+                    <div className="wt-credit-card-header">
+                      <span className="wt-credit-card-name">{shortName}</span>
+                      <span className="wt-credit-card-fee">
+                        ${card.annualFee}/yr →{' '}
+                        <strong style={{ color: effective <= 0 ? 'var(--color-success)' : undefined }}>
+                          {effective > 0 ? `$${effective} net` : effective === 0 ? 'fully offset' : `+$${Math.abs(effective)} net positive`}
+                        </strong>
+                      </span>
+                    </div>
+                    <div className="wt-credit-pills">
+                      {allCredits.map(cr => {
+                        const applied = appliedIds.includes(cr.id);
+                        return (
+                          <button
+                            key={cr.id}
+                            className={`wt-credit-pill ${applied ? 'wt-credit-pill-on' : 'wt-credit-pill-off'}`}
+                            title={cr.description}
+                            onClick={() => toggleCredit(cid, cr.id)}
+                          >
+                            {applied ? '✓ ' : ''}{cr.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })}
+            </>
+          )}
+
+          {/* Summary equation */}
+          <div className="wt-summary-row">
+            <div className="wt-summary-item">
+              <span className="wt-summary-label">Rewards</span>
+              <span className="wt-summary-val">{fmt(tier.earnings)}</span>
+            </div>
+            <div className="wt-summary-sep">{localEffectiveFee <= 0 ? '+' : '−'}</div>
+            <div className="wt-summary-item">
+              <span className="wt-summary-label">{localEffectiveFee <= 0 ? 'Fee savings' : 'Net fees'}</span>
+              <span className="wt-summary-val" style={{ color: localEffectiveFee <= 0 ? 'var(--color-success)' : undefined }}>
+                {fmt(Math.abs(localEffectiveFee))}
+              </span>
+            </div>
+            <div className="wt-summary-sep">=</div>
+            <div className="wt-summary-item wt-summary-net">
+              <span className="wt-summary-label">Net / yr</span>
+              <span className="wt-summary-val">{fmt(localNetPerYear)}</span>
+            </div>
+            {!isCurrent && tier.welcomeBonus > 0 && (
+              <>
+                <div className="wt-summary-sep">+</div>
+                <div className="wt-summary-item">
+                  <span className="wt-summary-label">Yr 1 bonus</span>
+                  <span className="wt-summary-val">{fmt(tier.welcomeBonus)}</span>
+                </div>
+                <div className="wt-summary-sep">=</div>
+                <div className="wt-summary-item wt-summary-net">
+                  <span className="wt-summary-label">Year 1</span>
+                  <span className="wt-summary-val">{fmt(localYear1)}</span>
+                </div>
+              </>
+            )}
+          </div>
+          {localNetPerYear < 0 && (
+            <div className="wt-breakdown-negative-note">Fees outweigh rewards at your current spend level.</div>
+          )}
+
+          {/* Cards to apply for */}
+          {newCardIds.length > 0 && (
+            <div className="wt-new-cards">
+              <div className="wt-section-label">Cards to apply for</div>
+              {newCardIds.length > 1 && (
+                <div className="wt-stagger-note">
+                  <span className="wt-stagger-icon">💡</span>
+                  <span>Stagger applications 3–6 months apart — opening multiple cards at once makes it harder to hit each bonus requirement.</span>
+                </div>
+              )}
+              <div className="rec-applications">
+                {newCardIds.map(cid => {
+                  const card = CARDS.find(c => c.id === cid);
+                  if (!card) return null;
+                  const wb = card.welcomeBonus;
+                  const rawBonus = formatRawBonus(card);
+                  const dollarVal = !wb?.amount ? 0
+                    : wb.type === 'cashback' ? wb.amount
+                    : Math.round(wb.amount * ((rdStyle?.valuations[card.issuer] || 1.0) / 100));
+
+                  let feasibility = null, statusLine = null;
+                  if (wb && wb.spend > 0 && totalMonthlySpend > 0) {
+                    const monthlyNeeded = Math.ceil(wb.spend / wb.months);
+                    const shortfall = Math.max(0, monthlyNeeded - totalMonthlySpend);
+                    const pct = Math.min(100, (totalMonthlySpend / monthlyNeeded) * 100);
+                    feasibility = pct >= 100 ? 'easy' : pct >= 65 ? 'stretch' : 'hard';
+                    if (feasibility === 'easy') {
+                      statusLine = <>Put <strong>{fmt(monthlyNeeded)}/mo</strong> on this card for {wb.months} months — your existing spend covers it.</>;
+                    } else if (feasibility === 'stretch') {
+                      statusLine = <>Requires all your spending on this card + <strong>{fmt(shortfall)}/mo more</strong> for {wb.months} months.</>;
+                    } else {
+                      statusLine = <>You'd still be <strong>{fmt(shortfall)}/mo short</strong> even with all spend here — only viable with a large purchase.</>;
+                    }
+                  }
+
+                  return (
+                    <div key={cid} className={`rec-app-row${feasibility ? ` rec-app-${feasibility}` : ''}`}>
+                      <div className="rec-app-top">
+                        <span className="rec-app-name">{card.name}</span>
+                        {rawBonus && dollarVal > 0 && (
+                          <span className="rec-app-bonus">{rawBonus} <span className="rec-app-bonus-val">≈ {fmt(dollarVal)}</span></span>
+                        )}
+                        {rawBonus && dollarVal === 0 && (
+                          <span className="rec-app-bonus">{rawBonus}</span>
+                        )}
+                        {wb && wb.spend > 0 && (
+                          <span className="rec-app-req">Spend {fmt(wb.spend)} in {wb.months}mo</span>
+                        )}
+                        {feasibility && (
+                          <span className={`rec-app-badge rec-app-badge-${feasibility}`}>
+                            {feasibility === 'easy' ? 'Achievable' : feasibility === 'stretch' ? 'Stretch' : 'Difficult'}
+                          </span>
+                        )}
+                      </div>
+                      {statusLine && <div className="rec-app-status">{statusLine}</div>}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+
+        </div>
+      )}
+    </div>
+  );
+}
+
+function WalletResults({ local, onRestart, onGoToStep, plaidSource }) {
   const { spend, ownedCards, selectedCredits, redeemStyle, heldCards, activationStatus } = local;
-  const freeWallet = WALLET_TIERS.find(t => t.id === 'free');
   const [expandedTier, setExpandedTier] = useState(null);
+  const [showCustom, setShowCustom] = useState(false);
+  const tierSectionRef = useRef(null);
+  const tierCardRefs = useRef({});
 
   // Prepend "Your Current Wallet" if user has cards
   const currentWalletDef = ownedCards.length > 0
-    ? { id: 'current', name: 'Your Current Wallet', description: 'Your cards, optimally routed', cards: ownedCards }
+    ? { id: 'current', name: 'Your Current Wallet', description: 'Your cards, best routing applied', cards: ownedCards }
     : null;
   const tierDefs = currentWalletDef ? [currentWalletDef, ...WALLET_TIERS] : WALLET_TIERS;
+
+  // For predefined tiers, auto-apply only easy/universal credits (autoApply: true) for unowned cards.
+  // For owned cards, use the user's actual selectedCredits so we don't override their choices.
+  const creditsForTier = (tierCards) => {
+    const merged = { ...selectedCredits };
+    for (const id of tierCards) {
+      if (ownedCards.includes(id)) continue; // keep user's selection
+      const available = STATEMENT_CREDITS[id];
+      if (available?.length) merged[id] = available.filter(c => c.autoApply).map(c => c.id);
+    }
+    return merged;
+  };
 
   const tiers = tierDefs.map(tier => {
     const earnings = calculateWalletEarnings(tier.cards, spend, activationStatus, redeemStyle);
@@ -1209,7 +1249,8 @@ function WalletResults({ local, onRestart, onGoToStep }) {
       const card = CARDS.find(c => c.id === id);
       return s + (card?.annualFee || 0);
     }, 0);
-    const effectiveFee = tier.cards.reduce((s, id) => s + calculateEffectiveFee(id, selectedCredits), 0);
+    const tierCredits = creditsForTier(tier.cards);
+    const effectiveFee = tier.cards.reduce((s, id) => s + calculateEffectiveFee(id, tierCredits), 0);
     const netPerYear = earnings - effectiveFee;
 
     // Welcome bonus — skip cards the user already owns or has previously held
@@ -1235,364 +1276,387 @@ function WalletResults({ local, onRestart, onGoToStep }) {
     if (tier.id === 'current') wb = 0;
 
     const year1 = netPerYear + wb;
-    const breakeven = (tier.id !== 'free' && tier.id !== 'current')
-      ? calculateBreakeven(freeWallet.cards, tier.cards, spend, selectedCredits, heldCards, redeemStyle)
-      : null;
 
-    return { ...tier, earnings, totalFee, effectiveFee, netPerYear, year1, welcomeBonus: wb, breakeven };
+    return { ...tier, earnings, totalFee, effectiveFee, netPerYear, year1, welcomeBonus: wb };
   });
 
   const currentTier = tiers.find(t => t.id === 'current') || null;
   const totalMonthlySpend = Object.values(spend).reduce((s, v) => s + (parseFloat(v) || 0), 0);
 
-  // Best tier = same 3-year formula as RecommendationBanner
-  const bestTier = [...tiers]
-    .filter(t => t.id !== 'current' && t.id !== 'free')
-    .sort((a, b) => (b.year1 + b.netPerYear * 2) - (a.year1 + a.netPerYear * 2))[0] || tiers[0];
+  // Same spend-achievability filter as RecommendationBanner — must stay in sync
+  const canHitSpend = (tier) => {
+    for (const cid of tier.cards) {
+      if (ownedCards.includes(cid) || heldCards.includes(cid)) continue;
+      const card = CARDS.find(c => c.id === cid);
+      const wb = card?.welcomeBonus;
+      if (!wb || wb.spend === 0 || wb.isCashbackMatch) continue;
+      if (totalMonthlySpend < wb.spend / wb.months) return false;
+    }
+    return true;
+  };
 
-  // Returns feasibility info for a single card's welcome bonus
-  function getBonusFeasibility(card) {
-    const wb = card.welcomeBonus;
-    if (!wb || wb.spend === 0) return null;
-    if (heldCards.includes(card.id)) return { tier: 'held', pct: 0, monthsNeeded: null };
-    if (wb.isCashbackMatch) return { tier: 'match', pct: 100, monthsNeeded: null };
+  // Best tier = achievable + 3-year total, matching RecommendationBanner exactly
+  const candidateTiers = [...tiers].filter(t => t.id !== 'current' && t.id !== 'free');
+  const achievableTiers = candidateTiers.filter(t => canHitSpend(t) && newAppsNeeded(t, ownedCards, heldCards) <= MAX_NEW_APPS);
+  const baseline = currentTier || tiers.find(t => t.id === 'free');
+  const baselineThreeYr = baseline ? baseline.year1 + baseline.netPerYear * 2 : 0;
+  const topCandidate = (achievableTiers.length > 0 ? achievableTiers : candidateTiers)
+    .sort((a, b) => (b.year1 + b.netPerYear * 2) - (a.year1 + a.netPerYear * 2))[0];
 
-    const monthsNeeded = totalMonthlySpend > 0 ? wb.spend / totalMonthlySpend : Infinity;
-    const pct = Math.min(100, (totalMonthlySpend * wb.months / wb.spend) * 100);
+  // Apply the same $75/yr threshold as RecommendationBanner — no BEST badge if advantage is trivial
+  const topNewCards = topCandidate?.cards.filter(cid => !ownedCards.includes(cid) && !heldCards.includes(cid)) || [];
+  const topThreshold = topNewCards.length > 0 ? 75 * 3 : 0;
+  const topThreeYrAdv = topCandidate ? (topCandidate.year1 + topCandidate.netPerYear * 2) - baselineThreeYr : 0;
+  const bestTier = topThreeYrAdv >= topThreshold ? topCandidate : null;
 
-    let tier;
-    if (pct >= 100) tier = 'easy';
-    else if (pct >= 65) tier = 'stretch';
-    else tier = 'hard';
-
-    return { tier, pct, monthsNeeded, required: wb.spend, window: wb.months };
-  }
+  // Display tiers — baseline first, then paid options sorted so the best is always Option 1
+  const nonBaselineSorted = [...candidateTiers]
+    .sort((a, b) => (b.year1 + b.netPerYear * 2) - (a.year1 + a.netPerYear * 2));
+  const paidDisplayTiers = [nonBaselineSorted[0], nonBaselineSorted[1]]
+    .filter(Boolean)
+    .map((t, i) => ({ ...t, name: `Option ${i + 1}` }));
+  const displayTiers = [baseline, ...paidDisplayTiers]
+    .filter(Boolean)
+    .filter((t, i, arr) => arr.findIndex(x => x?.id === t.id) === i);
 
   return (
     <div className="wizard">
-      <div className="results-header">
-        <h2>Your Wallet Analysis</h2>
-        <p>
-          {fmt(totalMonthlySpend)}/mo spend &nbsp;·&nbsp;{' '}
-          {ownedCards.length} card{ownedCards.length !== 1 ? 's' : ''} &nbsp;·&nbsp;{' '}
-          {REDEMPTION_STYLES.find(r => r.id === redeemStyle)?.label}
-        </p>
-      </div>
+      {/* ── Results hero ── */}
+      <div className="results-hero">
+        <div className="results-hero-title">Your Wallet Analysis</div>
+        {plaidSource && (
+          <div className="results-hero-plaid">
+            🔗 Spending from Plaid &nbsp;·&nbsp;
+            <Link to="/transactions" style={{ color: 'var(--color-success)', textDecoration: 'underline' }}>
+              View transactions →
+            </Link>
+          </div>
+        )}
 
-      {/* Step edit bar */}
-      <div className="results-edit-bar">
-        {STEPS.map((label, i) => (
-          <button key={i} className="results-edit-step" onClick={() => onGoToStep(i)}>
-            <span className="results-edit-num">{i + 1}</span>
-            {label}
-            <span className="results-edit-icon">✎</span>
+        {/* Summary cards */}
+        <div className="results-summary-row">
+          {/* Spend */}
+          <button className="results-summary-card" onClick={() => onGoToStep(0)}>
+            <span className="rsc-icon">💳</span>
+            <div className="rsc-content">
+              <span className="rsc-label">Monthly spend</span>
+              <span className="rsc-value">{fmt(totalMonthlySpend)}</span>
+              {(() => {
+                const topCats = CATEGORIES
+                  .map(cat => ({ cat, val: parseFloat(spend[cat.id]) || 0 }))
+                  .filter(x => x.val > 0)
+                  .sort((a, b) => b.val - a.val)
+                  .slice(0, 3);
+                return topCats.length > 0 && (
+                  <span className="rsc-detail">
+                    {topCats.map(({ cat, val }) => `${cat.icon} ${fmt(val)}`).join('  ')}
+                  </span>
+                );
+              })()}
+            </div>
+            <span className="rsc-edit">✎</span>
           </button>
-        ))}
+
+          {/* Cards */}
+          <button className="results-summary-card" onClick={() => onGoToStep(1)}>
+            <span className="rsc-icon">🃏</span>
+            <div className="rsc-content">
+              <span className="rsc-label">Your cards</span>
+              <span className="rsc-value">{ownedCards.length} card{ownedCards.length !== 1 ? 's' : ''}</span>
+              <span className="rsc-detail">
+                {ownedCards.slice(0, 3).map(cid => {
+                  const card = CARDS.find(c => c.id === cid);
+                  return card?.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '');
+                }).filter(Boolean).join(', ')}
+                {ownedCards.length > 3 ? ` +${ownedCards.length - 3} more` : ''}
+              </span>
+            </div>
+            <span className="rsc-edit">✎</span>
+          </button>
+
+          {/* Redemption */}
+          <button className="results-summary-card" onClick={() => onGoToStep(2)}>
+            <span className="rsc-icon">{REDEEM_ICONS[redeemStyle] || '💵'}</span>
+            <div className="rsc-content">
+              <span className="rsc-label">Redemption</span>
+              <span className="rsc-value">{REDEMPTION_STYLES.find(r => r.id === redeemStyle)?.label}</span>
+              <span className="rsc-detail">{REDEMPTION_STYLES.find(r => r.id === redeemStyle)?.description}</span>
+            </div>
+            <span className="rsc-edit">✎</span>
+          </button>
+        </div>
       </div>
 
       {/* 1. Recommendation — quick answer at the top */}
-      <RecommendationBanner tiers={tiers} ownedCards={ownedCards} heldCards={heldCards} totalMonthlySpend={totalMonthlySpend} spend={spend} redeemStyle={redeemStyle} />
-
-      {/* 2. Compare tool — most actionable view, above tier cards */}
-      <TierComparison
-        tiers={tiers}
-        defaultA={currentTier ? 'current' : 'free'}
-        defaultB={bestTier?.id}
-        totalMonthlySpend={totalMonthlySpend}
+      <RecommendationBanner
+        tiers={displayTiers}
+        displayTierIds={displayTiers.map(t => t.id)}
         ownedCards={ownedCards}
         heldCards={heldCards}
+        totalMonthlySpend={totalMonthlySpend}
+        spend={spend}
         redeemStyle={redeemStyle}
+        onViewDetails={() => {
+          tierSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          if (bestTier) {
+            setExpandedTier(bestTier.id);
+          }
+        }}
       />
 
-      {/* 3. Tier cards — detailed breakdown */}
-      <div className="results-section">
+      {/* 2. Tier cards */}
+      {(() => {
+        return (
+      <div className="results-section" ref={tierSectionRef}>
         <h3 className="results-section-title">Wallet Options</h3>
         <div className="wallet-tiers">
-          {tiers.map(tier => {
-            const isCurrent = tier.id === 'current';
+          {displayTiers.map(tier => {
+            const isCurrent = tier.id === 'current' || tier.id === 'free';
             const isBest = tier.id === bestTier?.id;
+            const tooManyApps = !isCurrent && newAppsNeeded(tier, ownedCards, heldCards) > MAX_NEW_APPS;
+            const isOutOfReach = !isCurrent && !isBest && !achievableTiers.some(a => a.id === tier.id);
             const isExpanded = expandedTier === tier.id;
-            // Chart baseline: prefer current wallet, fall back to free
-            const chartBaseCards = currentTier ? currentTier.cards : freeWallet.cards;
-            const chartBaseName  = currentTier ? 'Your Current Wallet' : 'Free Wallet';
-
-            const vsCurrentDelta = currentTier && !isCurrent ? tier.netPerYear - currentTier.netPerYear : null;
             const newCardIds = tier.cards.filter(cid => !ownedCards.includes(cid) && !heldCards.includes(cid));
+            const initialCredits = creditsForTier(tier.cards);
 
             return (
-              <div key={tier.id} className={`wallet-tier ${isCurrent ? 'tier-current' : ''} ${isBest ? 'best' : ''} ${isExpanded ? 'expanded' : ''}`}>
-
-                {/* ── Collapsed header (always visible) ── */}
-                <div className="wt-header" onClick={() => setExpandedTier(isExpanded ? null : tier.id)}>
-                  <div className="wt-left">
-                    <div className="wt-name">
-                      {tier.name}
-                      {isCurrent && <span className="badge-current">CURRENT</span>}
-                      {!isCurrent && isBest && <span className="badge-best">BEST</span>}
-                    </div>
-                    <div className="wt-pills">
-                      {tier.cards.map(cid => {
-                        const card = CARDS.find(c => c.id === cid);
-                        const owns = ownedCards.includes(cid);
-                        return card ? (
-                          <span key={cid} className={`wt-pill ${owns ? 'wt-pill-own' : 'wt-pill-new'}`}>
-                            {card.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '')}
-                          </span>
-                        ) : null;
-                      })}
-                    </div>
-                  </div>
-                  <div className="wt-right">
-                    <div className="wt-kpi">
-                      <span className="wt-kpi-val">{fmt(tier.netPerYear)}</span>
-                      <span className="wt-kpi-label">net/yr</span>
-                    </div>
-                    {vsCurrentDelta !== null && (
-                      <div className={`wt-delta ${vsCurrentDelta >= 0 ? 'pos' : 'neg'}`}>
-                        {vsCurrentDelta >= 0 ? '+' : ''}{fmt(vsCurrentDelta)}/yr vs yours
-                      </div>
-                    )}
-                    {isCurrent && (
-                      <div className="wt-delta pos">your baseline</div>
-                    )}
-                    <span className="wt-chevron">{isExpanded ? '▲' : '▼'}</span>
-                  </div>
-                </div>
-
-                {/* ── Expanded detail ── */}
-                {isExpanded && (
-                  <div className="wt-body">
-
-                    {/* Earnings breakdown */}
-                    <div className="wt-breakdown">
-                      {/* Per-category earnings rows */}
-                      {(() => {
-                        const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
-                        return CATEGORIES.map(cat => {
-                          const monthly = parseFloat(spend[cat.id]) || 0;
-                          if (!monthly) return null;
-                          // Find best card in this tier for this category
-                          let bestCard = null, bestRate = 0;
-                          for (const cid of tier.cards) {
-                            const card = CARDS.find(c => c.id === cid);
-                            if (!card) continue;
-                            const r = getEffectiveRate(card, cat.id, activationStatus, monthly);
-                            if (r > bestRate) { bestRate = r; bestCard = card; }
-                          }
-                          if (!bestCard) return null;
-                          const val = (style?.valuations[bestCard.issuer] || 1.0) / 100;
-                          const annual = monthly * 12 * bestRate * val;
-                          const shortName = bestCard.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '');
-                          return (
-                            <div key={cat.id} className="wt-breakdown-row wt-breakdown-cat">
-                              <span className="wt-breakdown-cat-label">
-                                {cat.icon} {cat.label}
-                                <span className="wt-breakdown-cat-detail">
-                                  {fmt(monthly)}/mo × {bestRate}x ({shortName}) × {(val * 100).toFixed(1)}¢/pt × 12
-                                </span>
-                              </span>
-                              <span>{fmt(annual)}</span>
-                            </div>
-                          );
-                        }).filter(Boolean);
-                      })()}
-                      <div className="wt-breakdown-row wt-breakdown-subtotal">
-                        <span>Total earnings</span><span>{fmt(tier.earnings)}</span>
-                      </div>
-                      {/* Per-card fee breakdown */}
-                      {tier.cards.map(cid => {
-                        const card = CARDS.find(c => c.id === cid);
-                        if (!card || card.annualFee === 0) return null;
-                        const cardCredits = STATEMENT_CREDITS[cid] || [];
-                        const chosenCredits = cardCredits.filter(cr =>
-                          (selectedCredits[cid] || []).includes(cr.id)
-                        );
-                        const creditSum = chosenCredits.reduce((s, cr) => s + cr.value, 0);
-                        const effective = Math.max(0, card.annualFee - creditSum);
-                        const shortName = card.name.replace('Chase ', '').replace('Amex ', '').replace('Capital One ', '');
-                        return (
-                          <div key={cid} className="wt-breakdown-fee-card">
-                            <div className="wt-breakdown-row wt-breakdown-cat">
-                              <span>{shortName}</span>
-                              <span>−${card.annualFee}</span>
-                            </div>
-                            {chosenCredits.map(cr => (
-                              <div key={cr.id} className="wt-breakdown-row wt-breakdown-credit">
-                                <span>+ {cr.label}</span>
-                                <span>+${cr.value}</span>
-                              </div>
-                            ))}
-                            {creditSum > 0 && (
-                              <div className="wt-breakdown-row wt-breakdown-cat" style={{ fontWeight: 600 }}>
-                                <span>Effective fee</span>
-                                <span>−${effective}</span>
-                              </div>
-                            )}
-                          </div>
-                        );
-                      })}
-                      <div className="wt-breakdown-row muted">
-                        <span>Total fees after credits</span>
-                        <span>{tier.effectiveFee > 0 ? `−${fmt(tier.effectiveFee)}` : '$0'}</span>
-                      </div>
-                      <div className="wt-breakdown-row total">
-                        <span>Net / year</span><span>{fmt(tier.netPerYear)}</span>
-                      </div>
-                      {tier.netPerYear < 0 && (
-                        <div className="wt-breakdown-negative-note">
-                          Fees outweigh rewards at your current spend level — you'd pay more than you earn back.
-                        </div>
-                      )}
-                      {!isCurrent && tier.welcomeBonus > 0 && (
-                        <div className="wt-breakdown-row accent">
-                          <span>+ Welcome bonus</span><span>{fmt(tier.welcomeBonus)}</span>
-                        </div>
-                      )}
-                      {!isCurrent && tier.welcomeBonus > 0 && (
-                        <div className="wt-breakdown-row total accent">
-                          <span>Year 1 total</span><span>{fmt(tier.year1)}</span>
-                        </div>
-                      )}
-                    </div>
-
-                    {/* New card applications */}
-                    {newCardIds.length > 0 && (
-                      <div className="wt-new-cards">
-                        <div className="wt-section-label">New applications needed</div>
-                        {newCardIds.map(cid => {
-                          const card = CARDS.find(c => c.id === cid);
-                          if (!card) return null;
-                          const f = getBonusFeasibility(card);
-                          const rdStyle = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
-                          const raw = formatRawBonus(card);
-                          const wb = card.welcomeBonus;
-                          const dollarVal = !wb?.amount ? 0
-                            : wb.type === 'cashback' ? wb.amount
-                            : Math.round(wb.amount * ((rdStyle?.valuations[card.issuer] || 1.0) / 100));
-                          const effFee = calculateEffectiveFee(cid, selectedCredits);
-                          const feasLabel = { easy: 'Achievable', stretch: 'Stretch', hard: 'Difficult', match: 'Year 1 match', held: 'Already held' };
-                          const monthlyNeeded = wb?.spend > 0 ? Math.ceil(wb.spend / wb.months) : 0;
-                          const shortfall = monthlyNeeded > 0 ? Math.max(0, monthlyNeeded - totalMonthlySpend) : 0;
-                          return (
-                            <div key={cid} className="wt-card-row">
-                              <div className="wt-card-row-top">
-                                <span className="wt-card-row-name">{card.name}</span>
-                                <span className="wt-card-row-fee">
-                                  {effFee === 0 ? 'No annual fee'
-                                    : effFee < card.annualFee ? `$${effFee}/yr after credits`
-                                    : `$${card.annualFee}/yr`}
-                                </span>
-                              </div>
-                              {raw && dollarVal > 0 && (
-                                <div className="wt-card-row-bonus">
-                                  <span className="wt-bonus-raw">{raw}</span>
-                                  <span className="wt-bonus-dol">≈ {fmt(dollarVal)}</span>
-                                  {f && <span className={`wt-bonus-badge wt-bonus-${f.tier}`}>{feasLabel[f.tier]}</span>}
-                                </div>
-                              )}
-                              {f && wb?.spend > 0 && f.tier !== 'held' && f.tier !== 'match' && (
-                                <div className="wt-card-row-spend">
-                                  Spend {fmt(wb.spend)} in {wb.months}mo
-                                  {shortfall > 0
-                                    ? <> — needs <strong>{fmt(shortfall)}/mo more</strong> than your current total</>
-                                    : <> — <strong>your {fmt(totalMonthlySpend)}/mo covers it</strong></>}
-                                </div>
-                              )}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {/* Breakeven */}
-                    {!isCurrent && tier.id !== 'free' && (
-                      <div className={`wt-breakeven ${tier.breakeven ? 'ok' : 'never'}`}>
-                        {tier.breakeven
-                          ? `Pays for itself vs free wallet by month ${tier.breakeven}`
-                          : "Doesn't break even vs free wallet within 5 years at this spend level"}
-                      </div>
-                    )}
-
-                    {/* Chart */}
-                    {!isCurrent && tier.id !== 'free' && (() => {
-                      const chartData = generateCumulativeData(
-                        chartBaseCards, tier.cards, spend, selectedCredits, heldCards, redeemStyle
-                      );
-                      return (
-                        <div className="tier-chart">
-                          <div className="tier-chart-title">Annual net vs. {chartBaseName}</div>
-                          <NetAdvantageChart
-                            freeData={chartData.free}
-                            tierData={chartData.tier}
-                            tierName={tier.name}
-                            welcomeBonus={tier.welcomeBonus}
-                          />
-                        </div>
-                      );
-                    })()}
-                  </div>
-                )}
-              </div>
+              <TierCard
+                key={tier.id}
+                tier={tier}
+                initialCredits={initialCredits}
+                isCurrent={isCurrent}
+                isBest={isBest}
+                isOutOfReach={isOutOfReach}
+                tooManyApps={tooManyApps}
+                isExpanded={isExpanded}
+                onToggleExpand={() => setExpandedTier(isExpanded ? null : tier.id)}
+                tierCardRef={el => { tierCardRefs.current[tier.id] = el; }}
+                ownedCards={ownedCards}
+                heldCards={heldCards}
+                activationStatus={activationStatus}
+                spend={spend}
+                redeemStyle={redeemStyle}
+                baseline={baseline}
+                newCardIds={newCardIds}
+                totalMonthlySpend={totalMonthlySpend}
+              />
             );
           })}
         </div>
       </div>
+        );
+      })()}
 
-      {/* 4. Custom combo builder */}
-      <CustomComboBuilder
-        spend={spend}
-        selectedCredits={selectedCredits}
-        redeemStyle={redeemStyle}
-        heldCards={heldCards}
-        activationStatus={activationStatus}
-        currentTier={currentTier}
-      />
-
-      {/* 5. Optimize current — best card per category */}
-      {ownedCards.length > 0 && (
-        <div className="best-card-section">
-          <h3 className="best-card-title">Optimize Your Current Wallet</h3>
-          <p className="best-card-subtitle">Best card to use for each spend category right now.</p>
-          <div className="best-card-table">
-            {CATEGORIES.filter(cat => parseFloat(spend[cat.id]) > 0).map(cat => {
-              const monthly = parseFloat(spend[cat.id]) || 0;
-              let bestCard = null, bestRate = 0, bestVal = 0;
-              for (const cid of ownedCards) {
-                const card = CARDS.find(c => c.id === cid);
-                if (!card) continue;
-                const rate = getEffectiveRate(card, cat.id, activationStatus, monthly);
-                const rdStyle = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
-                const val = (rdStyle?.valuations[card.issuer] || 1.0) / 100;
-                if (rate * val > bestRate * bestVal) { bestCard = card; bestRate = rate; bestVal = val; }
-              }
-              if (!bestCard) return null;
-              const annualValue = monthly * 12 * bestRate * bestVal;
-              return (
-                <div key={cat.id} className="best-card-row">
-                  <div className="best-card-cat">
-                    <span className="best-card-icon">{CAT_ICONS[cat.id]}</span>
-                    <span className="best-card-cat-name">{cat.label}</span>
-                    <span className="best-card-spend">{fmt(monthly)}/mo</span>
-                  </div>
-                  <div className="best-card-result">
-                    <span className="best-card-name" style={{ borderLeft: `3px solid ${bestCard.color}` }}>
-                      {bestCard.name}
-                    </span>
-                    <span className="best-card-rate">{bestRate % 1 === 0 ? bestRate : bestRate.toFixed(1)}x</span>
-                    <span className="best-card-annual">{fmt(annualValue)}/yr</span>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </div>
-      )}
+      {/* 3. Custom combo builder — collapsible */}
+      <div className="collapsible-section">
+        <button className="collapsible-toggle" onClick={() => setShowCustom(s => !s)}>
+          <span>Build a custom combo</span>
+          <span className="collapsible-hint">Mix any cards to see live earnings</span>
+          <span className="collapsible-chevron">{showCustom ? '▲' : '▼'}</span>
+        </button>
+        {showCustom && (
+          <CustomComboBuilder
+            spend={spend}
+            selectedCredits={selectedCredits}
+            redeemStyle={redeemStyle}
+            heldCards={heldCards}
+            activationStatus={activationStatus}
+            currentTier={currentTier}
+          />
+        )}
+      </div>
 
       <div style={{ display: 'flex', gap: 12, justifyContent: 'center', alignItems: 'center', marginTop: 8 }}>
         <Link to="/earn" className="btn btn-primary" style={{ fontSize: 14 }}>Analyze My Earning →</Link>
         <button onClick={onRestart} style={{ background: 'none', border: 'none', fontSize: 13, color: 'var(--gray-400)', cursor: 'pointer', textDecoration: 'underline' }}>
           Reset all
         </button>
+      </div>
+      <p style={{ fontSize: 11, color: 'var(--gray-400)', textAlign: 'center', marginTop: 24, lineHeight: 1.5 }}>
+        Earnings estimates are based on standard published rates. Portal bookings, limited-time offers, and category caps may change your actual return. Always verify current terms before applying.
+      </p>
+    </div>
+  );
+}
+
+// ─── Plaid Link Step ──────────────────────────────────────────────────────────
+function PlaidLinkButton({ onSuccess, label }) {
+  const [linkToken, setLinkToken] = useState(null);
+  const [tokenError, setTokenError] = useState(null);
+
+  useEffect(() => {
+    fetch(`${API}/api/create_link_token`, { method: 'POST' })
+      .then(r => r.json())
+      .then(d => {
+        if (d.error) setTokenError(d.error);
+        else setLinkToken(d.link_token);
+      })
+      .catch(() => setTokenError('server_unavailable'));
+  }, []);
+
+  const { open, ready } = usePlaidLink({
+    token: linkToken || '',
+    onSuccess: async (publicToken) => {
+      await fetch(`${API}/api/exchange_token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ public_token: publicToken }),
+      });
+      onSuccess();
+    },
+  });
+
+  if (tokenError) return null; // server not running — hide button, only show skip
+
+  return (
+    <button
+      className="btn btn-primary"
+      onClick={() => open()}
+      disabled={!ready}
+      style={{ opacity: ready ? 1 : 0.5, fontSize: 15, padding: '12px 28px' }}
+    >
+      {ready ? (label || '🔗 Connect bank account') : 'Loading…'}
+    </button>
+  );
+}
+
+function PlaidLinkStep({ onLinked, onSkip }) {
+  const [analyzing, setAnalyzing] = useState(false);
+  const [error, setError] = useState(null);
+  const [connectedCount, setConnectedCount] = useState(0); // 0 = not connected
+
+  // Check if Plaid is already connected on mount
+  useEffect(() => {
+    fetch(`${API}/api/status`)
+      .then(r => r.json())
+      .then(d => { if (d.connected) setConnectedCount(d.count || 1); })
+      .catch(() => {});
+  }, []);
+
+  const fetchAndAnalyze = useCallback(async () => {
+    setAnalyzing(true);
+    setError(null);
+    try {
+      const end = new Date();
+      const start = new Date();
+      start.setMonth(start.getMonth() - 3);
+      const startDate = start.toISOString().slice(0, 10);
+      const endDate = end.toISOString().slice(0, 10);
+
+      // Fetch transactions and accounts in parallel
+      const [txnRes, acctRes] = await Promise.all([
+        fetch(`${API}/api/transactions?start_date=${startDate}&end_date=${endDate}`),
+        fetch(`${API}/api/accounts`),
+      ]);
+      const txnData = await txnRes.json();
+      const acctData = await acctRes.json();
+      if (txnData.error) throw new Error(txnData.error);
+
+      // Spend from transactions
+      const analysis = analyzeTransactions(txnData.transactions);
+      const { monthlyAvg } = projectSpend(analysis.byCategory, 3);
+      const spend = {};
+      for (const cat of ['dining', 'groceries', 'travel', 'gas', 'shopping', 'subscriptions', 'entertainment', 'other']) {
+        const val = Math.round(monthlyAvg[cat] || 0);
+        spend[cat] = val > 0 ? String(val) : '';
+      }
+
+      // Detect owned cards from credit accounts
+      const creditAccounts = (acctData.accounts || []).filter(a => a.type === 'credit');
+      const detectedCards = creditAccounts
+        .map(a => matchAccountToCard(a.name, a.official_name))
+        .filter(Boolean)
+        .filter((id, i, arr) => arr.indexOf(id) === i); // dedupe
+
+      onLinked(spend, detectedCards);
+    } catch (e) {
+      setError('Could not analyze transactions. You can still enter spend manually.');
+      setAnalyzing(false);
+    }
+  }, [onLinked]);
+
+  const handleSuccess = useCallback(() => {
+    setConnectedCount(c => c + 1);
+    fetchAndAnalyze();
+  }, [fetchAndAnalyze]);
+
+  if (analyzing) {
+    return (
+      <div className="page-container narrow">
+        <div className="step-card" style={{ textAlign: 'center', padding: '48px 24px' }}>
+          <div style={{ fontSize: 36, marginBottom: 16 }}>🔄</div>
+          <h2 className="step-heading">Analyzing your transactions…</h2>
+          <p className="step-subheading">We're reading 3 months of spending to pre-fill your profile.</p>
+        </div>
+      </div>
+    );
+  }
+
+  // Already connected — show count, option to add more, or proceed
+  if (connectedCount > 0) {
+    return (
+      <div className="page-container narrow">
+        <div className="step-card" style={{ textAlign: 'center', padding: '40px 32px' }}>
+          <div style={{ fontSize: 44, marginBottom: 12 }}>🏦</div>
+          <h2 className="step-heading" style={{ marginBottom: 8 }}>
+            {connectedCount === 1 ? '1 bank connected' : `${connectedCount} banks connected`}
+          </h2>
+          <p className="step-subheading" style={{ maxWidth: 400, margin: '0 auto 8px' }}>
+            {connectedCount === 1
+              ? 'Spend across multiple banks? Add another account for a complete picture.'
+              : `Great — we'll merge transactions from all ${connectedCount} accounts for the most accurate spend breakdown.`}
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14, marginTop: 24 }}>
+            <button
+              className="btn btn-primary"
+              onClick={fetchAndAnalyze}
+              style={{ fontSize: 15, padding: '12px 28px' }}
+            >
+              Use my transaction data →
+            </button>
+            <PlaidLinkButton onSuccess={handleSuccess} label="+ Connect another bank" />
+            {error && (
+              <p style={{ fontSize: 13, color: 'var(--color-gap0)', margin: 0 }}>{error}</p>
+            )}
+            <button
+              onClick={onSkip}
+              style={{ background: 'none', border: 'none', fontSize: 14, color: 'var(--gray-400)', cursor: 'pointer', textDecoration: 'underline', marginTop: 4 }}
+            >
+              Skip, I'll enter manually →
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="page-container narrow">
+      <div className="step-card" style={{ textAlign: 'center', padding: '40px 32px' }}>
+        <div style={{ fontSize: 44, marginBottom: 12 }}>🏦</div>
+        <h2 className="step-heading" style={{ marginBottom: 8 }}>Auto-fill from your banks</h2>
+        <p className="step-subheading" style={{ maxWidth: 400, margin: '0 auto 28px' }}>
+          Connect one or more bank accounts to automatically calculate your monthly spend by category. Add all the banks you use — we'll merge them.
+        </p>
+
+        <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 14 }}>
+          <PlaidLinkButton onSuccess={handleSuccess} />
+          {error && (
+            <p style={{ fontSize: 13, color: 'var(--color-gap0)', margin: 0 }}>{error}</p>
+          )}
+          <button
+            onClick={onSkip}
+            style={{ background: 'none', border: 'none', fontSize: 14, color: 'var(--gray-400)', cursor: 'pointer', textDecoration: 'underline', marginTop: 4 }}
+          >
+            Skip, I'll enter manually →
+          </button>
+        </div>
+
+        <div style={{ marginTop: 32, padding: '14px 20px', background: 'var(--gray-50)', borderRadius: 10, textAlign: 'left', maxWidth: 400, margin: '32px auto 0' }}>
+          <p style={{ fontSize: 12, color: 'var(--gray-400)', margin: 0, lineHeight: 1.6 }}>
+            🔒 <strong>Secure read-only access.</strong> We only read transaction categories and amounts — never account numbers or credentials. Powered by Plaid.
+          </p>
+        </div>
       </div>
     </div>
   );
@@ -1641,14 +1705,31 @@ export default function WalletOptimizer() {
   const [step, setStep] = useState(0);
   const [done, setDone] = useState(() => isComplete(local));
 
-  const syncAndFinish = (updatedLocal) => {
+  // Show Plaid link step when there's no existing spend data
+  const hasSpend = Object.values(local.spend).some(v => parseFloat(v) > 0);
+  const [showLinkStep, setShowLinkStep] = useState(!hasSpend);
+  const [plaidSource, setPlaidSource] = useState(false); // true if spend came from Plaid
+  const [plaidDetectedCards, setPlaidDetectedCards] = useState([]); // card IDs matched from bank accounts
+
+  const syncToContext = (updatedLocal) => {
     dispatch({ type: 'SET_SPEND', payload: updatedLocal.spend });
     dispatch({ type: 'SET_OWNED_CARDS', payload: updatedLocal.ownedCards });
     dispatch({ type: 'SET_ELIGIBILITY', payload: { cards24months: updatedLocal.cards24months, amexCount: updatedLocal.amexCount, heldCards: updatedLocal.heldCards } });
     dispatch({ type: 'SET_CREDITS', payload: updatedLocal.selectedCredits });
     dispatch({ type: 'SET_REDEEM_STYLE', payload: updatedLocal.redeemStyle });
+    dispatch({ type: 'SET_ACTIVATION', payload: updatedLocal.activationStatus });
+  };
+
+  const syncAndFinish = (updatedLocal) => {
+    syncToContext(updatedLocal);
     setDone(true);
   };
+
+  // On mount: if localStorage had a completed session, sync it to AppContext so
+  // EarnAnalyzer (and any other page reading context) sees the data immediately.
+  useEffect(() => {
+    if (isComplete(local)) syncToContext(local);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const next = () => {
     if (step < STEPS.length - 1) {
@@ -1672,19 +1753,42 @@ export default function WalletOptimizer() {
     setStep(0);
     setDone(false);
     setLocal(blank);
+    setShowLinkStep(true);
+    setPlaidSource(false);
     dispatch({ type: 'RESET' });
     try { localStorage.removeItem(LS_KEY); } catch {}
   };
 
+  // Plaid link step handlers
+  const handlePlaidLinked = useCallback((spend, detectedCards = []) => {
+    setLocal(l => ({
+      ...l,
+      spend,
+      // Pre-populate ownedCards if we detected any; keep existing selections otherwise
+      ownedCards: detectedCards.length > 0 ? detectedCards : l.ownedCards,
+    }));
+    setPlaidDetectedCards(detectedCards);
+    setPlaidSource(true);
+    setShowLinkStep(false);
+  }, []);
+
+  const handlePlaidSkip = useCallback(() => {
+    setShowLinkStep(false);
+  }, []);
+
+  if (showLinkStep && !done) {
+    return <PlaidLinkStep onLinked={handlePlaidLinked} onSkip={handlePlaidSkip} />;
+  }
+
   if (done) {
     return (
       <div className="page-container">
-        <WalletResults local={local} onRestart={restart} onGoToStep={goToStep} />
+        <WalletResults local={local} onRestart={restart} onGoToStep={goToStep} plaidSource={plaidSource} />
       </div>
     );
   }
 
-  const stepProps = { local, setLocal, onNext: next, onBack: () => setStep(s => s - 1) };
+  const stepProps = { local, setLocal, onNext: next, onBack: () => setStep(s => s - 1), plaidSource, plaidDetectedCards, onConnectBank: () => setShowLinkStep(true) };
 
   return (
     <div className="page-container narrow">

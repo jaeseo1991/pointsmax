@@ -159,6 +159,45 @@ export function analyzeTransactions(transactions) {
 }
 
 /**
+ * Like analyzeTransactions but groups spend by (category, cardId) using an
+ * account→card mapping. Returns:
+ * {
+ *   byCardCategory: { dining: { csr: 320, wfac: 80 }, groceries: { amex_bcp: 450 }, ... },
+ *   months: number  — inferred from date range
+ * }
+ * Transactions from unmapped accounts (mapping[account_id] === undefined/null) are skipped.
+ */
+export function analyzeTransactionsByCard(transactions, accountMapping = {}) {
+  const byCardCategory = {};
+  const monthSet = new Set();
+
+  for (const txn of transactions) {
+    if (txn.amount <= 0) continue;
+    const cardId = accountMapping[txn.account_id];
+    if (!cardId) continue; // unmapped or explicitly skipped
+
+    const cat = mapTransaction(txn);
+    if (!cat) continue;
+
+    monthSet.add(txn.date.slice(0, 7));
+    if (!byCardCategory[cat]) byCardCategory[cat] = {};
+    byCardCategory[cat][cardId] = (byCardCategory[cat][cardId] || 0) + txn.amount;
+  }
+
+  const months = Math.max(monthSet.size, 1);
+  // Normalise totals to monthly averages
+  const byCardCategoryMonthly = {};
+  for (const [cat, cardTotals] of Object.entries(byCardCategory)) {
+    byCardCategoryMonthly[cat] = {};
+    for (const [cardId, total] of Object.entries(cardTotals)) {
+      byCardCategoryMonthly[cat][cardId] = Math.round(total / months);
+    }
+  }
+
+  return { byCardCategory: byCardCategoryMonthly, months };
+}
+
+/**
  * Given byCategory totals and the number of months of data, returns:
  * - monthlyAvg per category
  * - projectedRemaining: spend projected from today to Dec 31 of this year
