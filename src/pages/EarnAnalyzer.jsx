@@ -236,21 +236,16 @@ export default function EarnAnalyzer() {
     const spendSummary = catBreakdown.map(r => `${r.cat.label}: ${fmt(r.totalSpend)}/mo`).join(', ');
     const prompt = `You are a credit card rewards expert. Cards: ${cardNames || 'none'}. Monthly spend: ${spendSummary || 'not set'}. Redemption: ${rdStyle?.label}. Monthly gaps — unactivated bonuses: ${fmt(gap0)}, wrong card routing: ${fmt(gap1)}. In 3-4 sentences, give the single most impactful actionable advice. Be specific. Don't repeat the numbers back.`;
     try {
-      const res = await fetch('https://api.anthropic.com/v1/messages', {
+      const res = await fetch(`${API}/api/analyze`, {
         method: 'POST',
-        headers: {
-          'x-api-key': import.meta.env.VITE_ANTHROPIC_API_KEY || '',
-          'anthropic-version': '2023-06-01',
-          'content-type': 'application/json',
-          'anthropic-dangerous-direct-browser-access': 'true',
-        },
-        body: JSON.stringify({ model: 'claude-haiku-4-5-20251001', max_tokens: 200, messages: [{ role: 'user', content: prompt }] }),
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ prompt }),
       });
       const data = await res.json();
-      if (data.error) throw new Error(data.error.message);
-      setAiText(data.content?.[0]?.text || '');
+      if (data.error) throw new Error(data.error);
+      setAiText(data.text || '');
     } catch (err) {
-      setAiError(err.message || 'Failed. Check your VITE_ANTHROPIC_API_KEY.');
+      setAiError(err.message || 'AI analysis failed.');
     } finally {
       setAiLoading(false);
     }
