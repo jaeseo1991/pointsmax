@@ -1,16 +1,51 @@
-# React + Vite
+# PointsMax
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+A credit card rewards optimizer that helps you earn more points on every purchase.
 
-Currently, two official plugins are available:
+## What It Does
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Oxc](https://oxc.rs)
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/)
+PointsMax analyzes your monthly spending and credit card wallet to show you:
 
-## React Compiler
+- **Earn Analyzer** — How much you're earning per category and where you're leaving money on the table
+- **Wallet Optimizer** — Which cards you should get based on your actual spending habits
+- **Redeem Scanner** — The best way to redeem your points based on your travel/cashback style
+- **Transactions** — Connect your bank via Plaid to analyze real spending data automatically
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+## Tech Stack
 
-## Expanding the ESLint configuration
+- **Frontend:** React + Vite, React Router v6, plain CSS with CSS variables
+- **Backend:** Node.js + Express (Plaid integration)
+- **AI:** Anthropic Claude API for personalized recommendations
+- **Data:** Plaid API for real transaction data
 
-If you are developing a production application, we recommend using TypeScript with type-aware lint rules enabled. Check out the [TS template](https://github.com/vitejs/vite/tree/main/packages/create-vite/template-react-ts) for information on how to integrate TypeScript and [`typescript-eslint`](https://typescript-eslint.io) in your project.
+## Features
+
+- Input your cards and monthly spend to instantly see reward gaps
+- Detects money lost to unactivated rotating bonus categories (e.g. Chase Freedom Flex, Discover it)
+- Recommends the optimal card to use per spending category
+- Supports multiple redemption styles: travel portal, transfer partners, or cashback
+- Plaid integration to auto-import transactions and map them to your cards
+
+## Getting Started
+
+```bash
+# Install dependencies
+npm install
+
+# Start the backend server (Plaid integration)
+node server/index.js
+
+# Start the frontend
+npm run dev
+```
+
+Requires a `.env` file with:
+```
+VITE_ANTHROPIC_API_KEY=your_key
+PLAID_CLIENT_ID=your_id
+PLAID_SECRET=your_secret
+```
+
+## Live Demo
+
+> Add your deployed URL here (e.g. Vercel link)
