@@ -130,5 +130,5 @@ app.post('/api/disconnect', (req, res) => {
   res.json({ success: true });
 });
 
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => console.log(`PointsMax API server running on http://localhost:${PORT}`));
