@@ -48,4 +48,4 @@ PLAID_SECRET=your_secret
 
 ## Live Demo
 
-> Add your deployed URL here (e.g. Vercel link)
+https://pointsmax-coral.vercel.app/
