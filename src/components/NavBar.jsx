@@ -14,10 +14,11 @@ export default function NavBar() {
         <ul className="nav-links">
           <li>
             <NavLink
-              to="/transactions"
+              to="/"
+              end
               className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
             >
-              Transactions
+              Earn Analyzer
             </NavLink>
           </li>
           <li>
@@ -30,10 +31,10 @@ export default function NavBar() {
           </li>
           <li>
             <NavLink
-              to="/earn"
+              to="/transactions"
               className={({ isActive }) => `nav-link${isActive ? ' active' : ''}`}
             >
-              Earn Analyzer
+              Transactions
             </NavLink>
           </li>
           <li>

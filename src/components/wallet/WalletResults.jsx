@@ -1,24 +1,75 @@
 import { useState, useRef } from 'react';
 import { Link } from 'react-router-dom';
-import { CARDS, CATEGORIES, WALLET_TIERS, STATEMENT_CREDITS, REDEMPTION_STYLES } from '../../data/cards';
+import { CARDS, CATEGORIES, STATEMENT_CREDITS, REDEMPTION_STYLES } from '../../data/cards';
 import { calculateWalletEarnings, calculateEffectiveFee, fmt } from '../../utils/calculations';
-import { newAppsNeeded, MAX_NEW_APPS, REDEEM_ICONS } from './walletUtils';
+import { REDEEM_ICONS } from './walletUtils';
 import RecommendationBanner from './RecommendationBanner';
 import TierCard from './TierCard';
 
 // Chase UR unlockers — adding CSR/CSP auto-includes CFU in custom builder
 const CHASE_UR_UNLOCKERS_UI = new Set(['csr', 'csp']);
 
+// Extra gain over best single-card option that a multi-card combo must produce
+// per dollar of effective new annual fees introduced. At 1.0, the extra gain
+// must fully cover the new effective fees (on top of them already being netted).
+const MULTI_CARD_FEE_RATIO = 1.0;
+
+// ─── Module-level helpers ─────────────────────────────────────────────────────
+
+function getCombinations(arr, k) {
+  if (k === 1) return arr.map(x => [x]);
+  const result = [];
+  for (let i = 0; i <= arr.length - k; i++) {
+    for (const rest of getCombinations(arr.slice(i + 1), k - 1)) {
+      result.push([arr[i], ...rest]);
+    }
+  }
+  return result;
+}
+
+const shortName = name =>
+  name.replace('Chase ', '').replace('American Express ', 'Amex ').replace('Capital One ', '');
+
+// For owned cards: use user's selectedCredits. For new cards: auto-apply easy credits.
+function creditsForCards(cardList, ownedCards, selectedCredits) {
+  const merged = { ...selectedCredits };
+  for (const id of cardList) {
+    if (ownedCards.includes(id)) continue;
+    const available = STATEMENT_CREDITS[id];
+    if (available?.length) merged[id] = available.filter(c => c.autoApply).map(c => c.id);
+  }
+  return merged;
+}
+
+function computeWelcomeBonus(newCardIds, heldCards, spend, activationStatus, redeemStyle) {
+  let wb = 0;
+  for (const cardId of newCardIds) {
+    if (heldCards.includes(cardId)) continue;
+    const card = CARDS.find(c => c.id === cardId);
+    if (!card?.welcomeBonus) continue;
+    const wbObj = card.welcomeBonus;
+    if (wbObj.isCashbackMatch) {
+      wb += calculateWalletEarnings([cardId], spend, activationStatus, redeemStyle);
+    } else if (wbObj.type === 'cashback') {
+      wb += wbObj.amount;
+    } else {
+      const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
+      wb += wbObj.amount * ((style?.valuations[card.issuer] || 1.0) / 100);
+    }
+  }
+  return wb;
+}
+
+// ─── CustomComboBuilder ───────────────────────────────────────────────────────
+
 function CustomComboBuilder({ spend, selectedCredits, redeemStyle, heldCards, activationStatus, currentTier }) {
   const [customCards, setCustomCards] = useState([]);
-  // Track CFU cards that were auto-added (so we can auto-remove them)
   const [autoAdded, setAutoAdded] = useState(new Set());
 
   const toggle = id => {
     setCustomCards(prev => {
       const next = prev.includes(id) ? prev.filter(c => c !== id) : [...prev, id];
 
-      // When adding CSR/CSP: auto-add CFU if not already present
       if (!prev.includes(id) && CHASE_UR_UNLOCKERS_UI.has(id)) {
         if (!next.includes('cfu')) {
           setAutoAdded(a => new Set([...a, 'cfu']));
@@ -26,7 +77,6 @@ function CustomComboBuilder({ spend, selectedCredits, redeemStyle, heldCards, ac
         }
       }
 
-      // When removing CSR/CSP: if CFU was auto-added and no other unlocker remains, remove it
       if (prev.includes(id) && CHASE_UR_UNLOCKERS_UI.has(id)) {
         const remainingUnlockers = next.filter(c => CHASE_UR_UNLOCKERS_UI.has(c));
         if (remainingUnlockers.length === 0) {
@@ -35,7 +85,6 @@ function CustomComboBuilder({ spend, selectedCredits, redeemStyle, heldCards, ac
         }
       }
 
-      // If user manually adds CFU, it's no longer auto-managed
       if (!prev.includes('cfu') && id === 'cfu') {
         setAutoAdded(a => { const n = new Set(a); n.delete('cfu'); return n; });
       }
@@ -134,106 +183,129 @@ function CustomComboBuilder({ spend, selectedCredits, redeemStyle, heldCards, ac
   );
 }
 
+// ─── WalletResults ────────────────────────────────────────────────────────────
+
 export default function WalletResults({ local, onRestart, onGoToStep, plaidSource }) {
-  const { spend, ownedCards, selectedCredits, redeemStyle, heldCards, activationStatus } = local;
+  const { spend, ownedCards, selectedCredits, redeemStyle, heldCards, activationStatus, cards24months, amexCount } = local;
   const [expandedTier, setExpandedTier] = useState(null);
   const [showCustom, setShowCustom] = useState(false);
   const tierSectionRef = useRef(null);
-  const tierCardRefs = useRef({});
 
-  // Prepend "Your Current Wallet" if user has cards
-  const currentWalletDef = ownedCards.length > 0
-    ? { id: 'current', name: 'Your Current Wallet', description: 'Your cards, best routing applied', cards: ownedCards }
-    : null;
-  const tierDefs = currentWalletDef ? [currentWalletDef, ...WALLET_TIERS] : WALLET_TIERS;
-
-  // For predefined tiers, auto-apply only easy/universal credits (autoApply: true) for unowned cards.
-  // For owned cards, use the user's actual selectedCredits so we don't override their choices.
-  const creditsForTier = (tierCards) => {
-    const merged = { ...selectedCredits };
-    for (const id of tierCards) {
-      if (ownedCards.includes(id)) continue; // keep user's selection
-      const available = STATEMENT_CREDITS[id];
-      if (available?.length) merged[id] = available.filter(c => c.autoApply).map(c => c.id);
-    }
-    return merged;
-  };
-
-  const tiers = tierDefs.map(tier => {
-    const earnings = calculateWalletEarnings(tier.cards, spend, activationStatus, redeemStyle);
-    const totalFee = tier.cards.reduce((s, id) => {
-      const card = CARDS.find(c => c.id === id);
-      return s + (card?.annualFee || 0);
-    }, 0);
-    const tierCredits = creditsForTier(tier.cards);
-    const effectiveFee = tier.cards.reduce((s, id) => s + calculateEffectiveFee(id, tierCredits), 0);
-    const netPerYear = earnings - effectiveFee;
-
-    // Welcome bonus — skip cards the user already owns or has previously held
-    let wb = 0;
-    for (const cardId of tier.cards) {
-      if (ownedCards.includes(cardId)) continue;
-      if (heldCards.includes(cardId)) continue;
-      const card = CARDS.find(c => c.id === cardId);
-      if (!card?.welcomeBonus) continue;
-      const wbObj = card.welcomeBonus;
-      if (wbObj.isCashbackMatch) {
-        wb += calculateWalletEarnings([cardId], spend, activationStatus, redeemStyle);
-      } else if (wbObj.type === 'cashback') {
-        wb += wbObj.amount;
-      } else {
-        const style = REDEMPTION_STYLES.find(r => r.id === redeemStyle);
-        const val = (style?.valuations[card.issuer] || 1.0) / 100;
-        wb += wbObj.amount * val;
-      }
-    }
-
-    // Current wallet has no welcome bonus (already own the cards)
-    if (tier.id === 'current') wb = 0;
-
-    const year1 = netPerYear + wb;
-
-    return { ...tier, earnings, totalFee, effectiveFee, netPerYear, year1, welcomeBonus: wb };
-  });
-
-  const currentTier = tiers.find(t => t.id === 'current') || null;
   const totalMonthlySpend = Object.values(spend).reduce((s, v) => s + (parseFloat(v) || 0), 0);
 
-  // Same spend-achievability filter as RecommendationBanner — must stay in sync
-  const canHitSpend = (tier) => {
-    for (const cid of tier.cards) {
-      if (ownedCards.includes(cid) || heldCards.includes(cid)) continue;
-      const card = CARDS.find(c => c.id === cid);
-      const wb = card?.welcomeBonus;
-      if (!wb || wb.spend === 0 || wb.isCashbackMatch) continue;
-      if (totalMonthlySpend < wb.spend / wb.months) return false;
+  // ── 1. Build baseline ──────────────────────────────────────────────────────
+  // If user owns cards: their current wallet.
+  // If not: dynamically find the best 1–3 card combo from $0-fee cards.
+  let baselineCards = ownedCards;
+  if (ownedCards.length === 0) {
+    const freeIds = CARDS.filter(c => c.annualFee === 0).map(c => c.id);
+    let bestNet = -Infinity;
+    for (let size = 1; size <= 3; size++) {
+      for (const combo of getCombinations(freeIds, size)) {
+        const net = calculateWalletEarnings(combo, spend, {}, redeemStyle);
+        if (net > bestNet) { bestNet = net; baselineCards = combo; }
+      }
     }
-    return true;
+  }
+
+  const baselineCredits = creditsForCards(baselineCards, ownedCards, selectedCredits);
+  const baselineEarnings = calculateWalletEarnings(baselineCards, spend, activationStatus, redeemStyle);
+  const baselineEffectiveFee = baselineCards.reduce((s, id) => s + calculateEffectiveFee(id, baselineCredits), 0);
+  const baselineTotalFee = baselineCards.reduce((s, id) => (CARDS.find(c => c.id === id)?.annualFee || 0) + s, 0);
+  const baselineNetPerYear = baselineEarnings - baselineEffectiveFee;
+
+  const baseline = {
+    id: ownedCards.length > 0 ? 'current' : 'free',
+    name: ownedCards.length > 0 ? 'Your Current Wallet' : 'Best Free Setup',
+    description: ownedCards.length > 0 ? 'Your cards, best routing applied' : 'Best $0-fee cards for your spend',
+    cards: baselineCards,
+    earnings: baselineEarnings,
+    totalFee: baselineTotalFee,
+    effectiveFee: baselineEffectiveFee,
+    netPerYear: baselineNetPerYear,
+    welcomeBonus: 0,
+    year1: baselineNetPerYear,
+    newCards: [],
   };
 
-  // Best tier = achievable + 3-year total, matching RecommendationBanner exactly
-  const candidateTiers = [...tiers].filter(t => t.id !== 'current' && t.id !== 'free');
-  const achievableTiers = candidateTiers.filter(t => canHitSpend(t) && newAppsNeeded(t, ownedCards, heldCards) <= MAX_NEW_APPS);
-  const baseline = currentTier || tiers.find(t => t.id === 'free');
-  const baselineThreeYr = baseline ? baseline.year1 + baseline.netPerYear * 2 : 0;
-  const topCandidate = (achievableTiers.length > 0 ? achievableTiers : candidateTiers)
-    .sort((a, b) => (b.year1 + b.netPerYear * 2) - (a.year1 + a.netPerYear * 2))[0];
+  // ── 2. Generate all +1 and +2 card candidates ──────────────────────────────
+  const over524 = cards24months >= 5;
+  const amexFull = amexCount >= 5;
 
-  // Apply the same $75/yr threshold as RecommendationBanner — no BEST badge if advantage is trivial
-  const topNewCards = topCandidate?.cards.filter(cid => !ownedCards.includes(cid) && !heldCards.includes(cid)) || [];
-  const topThreshold = topNewCards.length > 0 ? 75 * 3 : 0;
-  const topThreeYrAdv = topCandidate ? (topCandidate.year1 + topCandidate.netPerYear * 2) - baselineThreeYr : 0;
-  const bestTier = topThreeYrAdv >= topThreshold ? topCandidate : null;
+  const available = CARDS.filter(card => {
+    if (ownedCards.includes(card.id)) return false;
+    if (heldCards.includes(card.id)) return false;
+    if (card.issuer === 'Chase' && over524) return false;
+    if (card.issuer === 'Amex' && amexFull) return false;
+    return true;
+  });
 
-  // Display tiers — baseline first, then paid options sorted so the best is always Option 1
-  const nonBaselineSorted = [...candidateTiers]
-    .sort((a, b) => (b.year1 + b.netPerYear * 2) - (a.year1 + a.netPerYear * 2));
-  const paidDisplayTiers = [nonBaselineSorted[0], nonBaselineSorted[1]]
-    .filter(Boolean)
-    .map((t, i) => ({ ...t, name: `Option ${i + 1}` }));
-  const displayTiers = [baseline, ...paidDisplayTiers]
-    .filter(Boolean)
-    .filter((t, i, arr) => arr.findIndex(x => x?.id === t.id) === i);
+  const buildCandidate = (newCardIds) => {
+    const cards = [...ownedCards, ...newCardIds];
+    const credits = creditsForCards(cards, ownedCards, selectedCredits);
+    const earnings = calculateWalletEarnings(cards, spend, activationStatus, redeemStyle);
+    const effectiveFee = cards.reduce((s, id) => s + calculateEffectiveFee(id, credits), 0);
+    const totalFee = cards.reduce((s, id) => (CARDS.find(c => c.id === id)?.annualFee || 0) + s, 0);
+    const netPerYear = earnings - effectiveFee;
+    const gain = netPerYear - baselineNetPerYear;
+    // Effective fees of the new cards only (used for multi-card threshold)
+    const newEffectiveFee = newCardIds.reduce((s, id) => s + calculateEffectiveFee(id, credits), 0);
+    const wb = computeWelcomeBonus(newCardIds, heldCards, spend, activationStatus, redeemStyle);
+    const label = newCardIds.map(id => shortName(CARDS.find(c => c.id === id)?.name || id)).join(' + ');
+    return {
+      cards, newCards: newCardIds,
+      earnings, totalFee, effectiveFee, netPerYear,
+      welcomeBonus: wb, year1: netPerYear + wb,
+      gain, newEffectiveFee,
+      description: `Add ${label}`,
+    };
+  };
+
+  const candidates = [];
+  for (const card of available) {
+    candidates.push(buildCandidate([card.id]));
+  }
+  for (let i = 0; i < available.length; i++) {
+    for (let j = i + 1; j < available.length; j++) {
+      candidates.push(buildCandidate([available[i].id, available[j].id]));
+    }
+  }
+
+  // ── 3. Filter and rank ─────────────────────────────────────────────────────
+  const withGain = candidates.filter(c => c.gain > 0);
+  const bestSingleGain = Math.max(0, ...withGain.filter(c => c.newCards.length === 1).map(c => c.gain));
+
+  const valid = withGain.filter(c => {
+    if (c.newCards.length <= 1) return true;
+    // Multi-card: extra gain over best single-card option must exceed
+    // new effective fees × MULTI_CARD_FEE_RATIO
+    const extraGain = c.gain - bestSingleGain;
+    return extraGain > c.newEffectiveFee * MULTI_CARD_FEE_RATIO;
+  });
+
+  valid.sort((a, b) => b.gain - a.gain);
+
+  // Pick top 2 with diversity — no shared new cards between options
+  const displayOptions = [];
+  for (const c of valid) {
+    if (displayOptions.length >= 2) break;
+    const usedCards = displayOptions.flatMap(o => o.newCards);
+    if (c.newCards.some(id => usedCards.includes(id))) continue;
+    displayOptions.push(c);
+  }
+
+  // ── 4. Assemble displayTiers ───────────────────────────────────────────────
+  const displayTiers = [
+    baseline,
+    ...displayOptions.map((opt, i) => ({
+      ...opt,
+      id: `option_${i + 1}`,
+      name: `Option ${i + 1}`,
+    })),
+  ];
+
+  const bestTierId = displayOptions.length > 0 ? 'option_1' : null;
+  const noBetterOption = displayOptions.length === 0;
 
   return (
     <div className="wizard">
@@ -251,7 +323,6 @@ export default function WalletResults({ local, onRestart, onGoToStep, plaidSourc
 
         {/* Summary cards */}
         <div className="results-summary-row">
-          {/* Spend */}
           <button className="results-summary-card" onClick={() => onGoToStep(0)}>
             <span className="rsc-icon">💳</span>
             <div className="rsc-content">
@@ -273,7 +344,6 @@ export default function WalletResults({ local, onRestart, onGoToStep, plaidSourc
             <span className="rsc-edit">✎</span>
           </button>
 
-          {/* Cards */}
           <button className="results-summary-card" onClick={() => onGoToStep(1)}>
             <span className="rsc-icon">🃏</span>
             <div className="rsc-content">
@@ -290,7 +360,6 @@ export default function WalletResults({ local, onRestart, onGoToStep, plaidSourc
             <span className="rsc-edit">✎</span>
           </button>
 
-          {/* Redemption */}
           <button className="results-summary-card" onClick={() => onGoToStep(2)}>
             <span className="rsc-icon">{REDEEM_ICONS[redeemStyle] || '💵'}</span>
             <div className="rsc-content">
@@ -303,20 +372,18 @@ export default function WalletResults({ local, onRestart, onGoToStep, plaidSourc
         </div>
       </div>
 
-      {/* 1. Recommendation — quick answer at the top */}
+      {/* 1. Recommendation banner */}
       <RecommendationBanner
         tiers={displayTiers}
-        displayTierIds={displayTiers.map(t => t.id)}
         ownedCards={ownedCards}
         heldCards={heldCards}
         totalMonthlySpend={totalMonthlySpend}
         spend={spend}
         redeemStyle={redeemStyle}
+        noBetterOption={noBetterOption}
         onViewDetails={() => {
           tierSectionRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          if (bestTier) {
-            setExpandedTier(bestTier.id);
-          }
+          setExpandedTier(bestTierId);
         }}
       />
 
@@ -326,12 +393,9 @@ export default function WalletResults({ local, onRestart, onGoToStep, plaidSourc
         <div className="wallet-tiers">
           {displayTiers.map(tier => {
             const isCurrent = tier.id === 'current' || tier.id === 'free';
-            const isBest = tier.id === bestTier?.id;
-            const tooManyApps = !isCurrent && newAppsNeeded(tier, ownedCards, heldCards) > MAX_NEW_APPS;
-            const isOutOfReach = !isCurrent && !isBest && !achievableTiers.some(a => a.id === tier.id);
+            const isBest = tier.id === bestTierId;
             const isExpanded = expandedTier === tier.id;
-            const newCardIds = tier.cards.filter(cid => !ownedCards.includes(cid) && !heldCards.includes(cid));
-            const initialCredits = creditsForTier(tier.cards);
+            const initialCredits = creditsForCards(tier.cards, ownedCards, selectedCredits);
 
             return (
               <TierCard
@@ -340,18 +404,18 @@ export default function WalletResults({ local, onRestart, onGoToStep, plaidSourc
                 initialCredits={initialCredits}
                 isCurrent={isCurrent}
                 isBest={isBest}
-                isOutOfReach={isOutOfReach}
-                tooManyApps={tooManyApps}
+                isOutOfReach={false}
+                tooManyApps={false}
                 isExpanded={isExpanded}
                 onToggleExpand={() => setExpandedTier(isExpanded ? null : tier.id)}
-                tierCardRef={el => { tierCardRefs.current[tier.id] = el; }}
+                tierCardRef={null}
                 ownedCards={ownedCards}
                 heldCards={heldCards}
                 activationStatus={activationStatus}
                 spend={spend}
                 redeemStyle={redeemStyle}
                 baseline={baseline}
-                newCardIds={newCardIds}
+                newCardIds={tier.newCards || []}
                 totalMonthlySpend={totalMonthlySpend}
               />
             );
@@ -359,7 +423,7 @@ export default function WalletResults({ local, onRestart, onGoToStep, plaidSourc
         </div>
       </div>
 
-      {/* 3. Custom combo builder — collapsible */}
+      {/* 3. Custom combo builder */}
       <div className="collapsible-section">
         <button className="collapsible-toggle" onClick={() => setShowCustom(s => !s)}>
           <span>Build a custom combo</span>
@@ -373,7 +437,7 @@ export default function WalletResults({ local, onRestart, onGoToStep, plaidSourc
             redeemStyle={redeemStyle}
             heldCards={heldCards}
             activationStatus={activationStatus}
-            currentTier={currentTier}
+            currentTier={baseline}
           />
         )}
       </div>

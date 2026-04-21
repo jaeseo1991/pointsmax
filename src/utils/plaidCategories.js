@@ -40,7 +40,7 @@ const DETAILED_MAP = {
   'FOOD_AND_DRINK_GROCERY': 'groceries',
   'FOOD_AND_DRINK_GROCERIES': 'groceries',
   // Travel
-  'TRAVEL_FLIGHTS': 'travel',
+  'TRAVEL_FLIGHTS': 'flights',
   'TRAVEL_HOTELS_AND_MOTELS': 'travel',
   'TRAVEL_CAR_RENTAL': 'travel',
   'TRAVEL_CRUISES': 'travel',
@@ -115,7 +115,8 @@ export function mapTransaction(txn) {
   const joined = cats.join(' ').toLowerCase();
   if (joined.includes('restaurant') || joined.includes('food') || joined.includes('coffee')) return 'dining';
   if (joined.includes('grocer') || joined.includes('supermarket')) return 'groceries';
-  if (joined.includes('airline') || joined.includes('hotel') || joined.includes('travel') || joined.includes('rideshare') || joined.includes('uber') || joined.includes('lyft')) return 'travel';
+  if (joined.includes('airline') || joined.includes('flight')) return 'flights';
+  if (joined.includes('hotel') || joined.includes('travel') || joined.includes('rideshare') || joined.includes('uber') || joined.includes('lyft')) return 'travel';
   if (joined.includes('gas') || joined.includes('fuel')) return 'gas';
   if (joined.includes('streaming') || joined.includes('subscription') || joined.includes('netflix') || joined.includes('spotify')) return 'subscriptions';
   if (joined.includes('entertainment') || joined.includes('gym') || joined.includes('sport')) return 'entertainment';
@@ -133,7 +134,7 @@ export function mapTransaction(txn) {
  * }
  */
 export function analyzeTransactions(transactions) {
-  const byCategory = { dining: 0, groceries: 0, travel: 0, gas: 0, shopping: 0, subscriptions: 0, entertainment: 0, other: 0 };
+  const byCategory = { dining: 0, groceries: 0, flights: 0, travel: 0, gas: 0, shopping: 0, subscriptions: 0, entertainment: 0, other: 0 };
   const byMonth = {};
   const enriched = [];
 
@@ -145,7 +146,7 @@ export function analyzeTransactions(transactions) {
 
     const month = txn.date.slice(0, 7); // 'YYYY-MM'
     if (!byMonth[month]) {
-      byMonth[month] = { dining: 0, groceries: 0, travel: 0, gas: 0, shopping: 0, subscriptions: 0, entertainment: 0, other: 0 };
+      byMonth[month] = { dining: 0, groceries: 0, flights: 0, travel: 0, gas: 0, shopping: 0, subscriptions: 0, entertainment: 0, other: 0 };
     }
     byMonth[month][cat] = (byMonth[month][cat] || 0) + txn.amount;
 

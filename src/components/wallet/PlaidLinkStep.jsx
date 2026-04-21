@@ -2,14 +2,15 @@ import { useState, useEffect, useCallback } from 'react';
 import { usePlaidLink } from 'react-plaid-link';
 import { analyzeTransactions, projectSpend } from '../../utils/plaidCategories';
 
-const API = 'http://localhost:3001';
+const API = import.meta.env.VITE_API_URL || 'http://localhost:3001';
 
 // Ordered most-specific first so "Sapphire Preferred" doesn't match "Sapphire Reserve"
 const CARD_NAME_PATTERNS = [
   { id: 'csr',           keywords: ['sapphire reserve'] },
   { id: 'csp',           keywords: ['sapphire preferred'] },
   { id: 'cfu',           keywords: ['freedom unlimited'] },
-  { id: 'cf',            keywords: ['freedom flex', 'freedom'] },
+  { id: 'cff',           keywords: ['freedom flex'] },
+  { id: 'cf',            keywords: ['freedom'] },
   { id: 'amex_plat',     keywords: ['platinum card', 'the platinum', 'amex platinum'] },
   { id: 'amex_gold',     keywords: ['gold card', 'amex gold', 'american express gold'] },
   { id: 'amex_bcp',      keywords: ['blue cash preferred', 'blue cash everyday'] },
@@ -108,7 +109,7 @@ export default function PlaidLinkStep({ onLinked, onSkip }) {
       const analysis = analyzeTransactions(txnData.transactions);
       const { monthlyAvg } = projectSpend(analysis.byCategory, 3);
       const spend = {};
-      for (const cat of ['dining', 'groceries', 'travel', 'gas', 'shopping', 'subscriptions', 'entertainment', 'other']) {
+      for (const cat of ['dining', 'groceries', 'flights', 'travel', 'gas', 'shopping', 'subscriptions', 'entertainment', 'other']) {
         const val = Math.round(monthlyAvg[cat] || 0);
         spend[cat] = val > 0 ? String(val) : '';
       }

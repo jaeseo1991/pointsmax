@@ -1,7 +1,7 @@
 import { CARDS } from '../../data/cards';
 
 export const CAT_ICONS = {
-  dining: '🍽️', groceries: '🛒', travel: '✈️', gas: '⛽',
+  dining: '🍽️', groceries: '🛒', flights: '✈️', travel: '🏨', gas: '⛽',
   shopping: '🛍️', subscriptions: '📱', entertainment: '🎬', other: '💳',
 };
 

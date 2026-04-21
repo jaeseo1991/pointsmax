@@ -2,7 +2,7 @@ import { createContext, useContext, useReducer } from 'react';
 
 const defaultState = {
   spend: {
-    dining: '', groceries: '', travel: '', gas: '',
+    dining: '', groceries: '', flights: '', travel: '', gas: '',
     shopping: '', subscriptions: '', entertainment: '', other: '',
   },
   ownedCards: [],

@@ -8,25 +8,25 @@ const SPEND_PRESETS = [
     id: 'average',
     label: 'Average American',
     icon: '🇺🇸',
-    spend: { dining: 350, groceries: 450, travel: 150, gas: 200, shopping: 250, subscriptions: 50, entertainment: 100, other: 100 },
+    spend: { dining: 350, groceries: 450, flights: 50, travel: 100, gas: 200, shopping: 250, subscriptions: 50, entertainment: 100, other: 100 },
   },
   {
     id: 'city',
     label: 'City Renter',
     icon: '🏙️',
-    spend: { dining: 600, groceries: 300, travel: 300, gas: 30, shopping: 300, subscriptions: 80, entertainment: 200, other: 100 },
+    spend: { dining: 600, groceries: 300, flights: 100, travel: 200, gas: 30, shopping: 300, subscriptions: 80, entertainment: 200, other: 100 },
   },
   {
     id: 'traveler',
     label: 'Frequent Traveler',
     icon: '✈️',
-    spend: { dining: 400, groceries: 200, travel: 800, gas: 100, shopping: 200, subscriptions: 60, entertainment: 100, other: 100 },
+    spend: { dining: 400, groceries: 200, flights: 400, travel: 400, gas: 100, shopping: 200, subscriptions: 60, entertainment: 100, other: 100 },
   },
   {
     id: 'family',
     label: 'Family',
     icon: '👨‍👩‍👧',
-    spend: { dining: 300, groceries: 800, travel: 200, gas: 300, shopping: 400, subscriptions: 100, entertainment: 150, other: 200 },
+    spend: { dining: 300, groceries: 800, flights: 100, travel: 100, gas: 300, shopping: 400, subscriptions: 100, entertainment: 150, other: 200 },
   },
 ];
 

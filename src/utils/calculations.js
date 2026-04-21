@@ -95,32 +95,47 @@ export function getEffectiveRate(card, category, activationStatus = {}, monthlyS
 
 /**
  * Monthly dollar gap from unactivated rotating bonuses.
- * For each entry assigned to a rotating card that is NOT activated,
- * calculates (potential at 5x - actual at 1x).
+ * For each rotating card you own that is NOT activated, compares what you'd
+ * earn at the bonus rate (on the total spend in those categories) vs what
+ * you're currently earning — regardless of which card that spend is routed to.
  */
-export function calculateGap0(categoryEntries = {}, activationStatus = {}, redeemStyle = 'portal') {
+export function calculateGap0(categoryEntries = {}, ownedCards = [], activationStatus = {}, redeemStyle = 'portal') {
   let gap = 0;
 
-  for (const [category, entries] of Object.entries(categoryEntries)) {
-    for (const entry of entries) {
-      const card = getCard(entry.cardId);
-      if (!card?.rotating?.isRotating) continue;
-      const { categories, multiplier } = card.rotating.currentQuarter;
-      if (!categories.includes(category)) continue;
-      if (activationStatus[card.id]) continue; // already activated, no gap
+  for (const cardId of ownedCards) {
+    const card = getCard(cardId);
+    if (!card?.rotating?.isRotating) continue;
+    if (activationStatus[cardId]) continue;
 
-      const amount = parseFloat(entry.amount) || 0;
-      if (!amount) continue;
-      const val = getValuation(card.issuer, redeemStyle);
-      const monthlyCap = card.rotating.currentQuarter.cap / 3;
-      const effectiveSpend = Math.min(amount, monthlyCap);
-      const potential = effectiveSpend * multiplier * val;
-      const actual = amount * 1 * val;
-      gap += potential - actual;
+    const { categories, multiplier, cap } = card.rotating.currentQuarter;
+    const val = getWalletValuation(card, ownedCards, redeemStyle);
+    const monthlyCap = cap / 3;
+
+    // Sum spend and current earnings across ALL rotating categories combined
+    let totalRotatingSpend = 0;
+    let currentEarnings = 0;
+    for (const category of categories) {
+      const entries = categoryEntries[category] || [];
+      for (const entry of entries) {
+        const amount = parseFloat(entry.amount) || 0;
+        totalRotatingSpend += amount;
+        const entryCard = getCard(entry.cardId);
+        if (!entryCard) continue;
+        const rate = getEffectiveRate(entryCard, category, activationStatus, amount);
+        const entryVal = getWalletValuation(entryCard, ownedCards, redeemStyle);
+        currentEarnings += amount * rate * entryVal;
+      }
     }
+    if (!totalRotatingSpend) continue;
+
+    // Bonus earnings with combined cap applied to total rotating spend
+    const effectiveSpend = Math.min(totalRotatingSpend, monthlyCap);
+    const bonusEarnings = effectiveSpend * multiplier * val + (totalRotatingSpend - effectiveSpend) * 1 * val;
+
+    gap += Math.max(0, bonusEarnings - currentEarnings);
   }
 
-  return Math.max(0, gap);
+  return gap;
 }
 
 /**

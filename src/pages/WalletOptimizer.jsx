@@ -90,7 +90,7 @@ export default function WalletOptimizer() {
 
   const restart = () => {
     const blank = {
-      spend: { dining:'', groceries:'', travel:'', gas:'', shopping:'', subscriptions:'', entertainment:'', other:'' },
+      spend: { dining:'', groceries:'', flights:'', travel:'', gas:'', shopping:'', subscriptions:'', entertainment:'', other:'' },
       ownedCards: [], cards24months: 0, amexCount: 0, heldCards: [],
       selectedCredits: {}, redeemStyle: 'portal', categoryEntries: {}, activationStatus: {},
     };

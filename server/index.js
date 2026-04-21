@@ -4,7 +4,11 @@ import cors from 'cors';
 import { PlaidApi, PlaidEnvironments, Configuration, Products, CountryCode } from 'plaid';
 
 const app = express();
-app.use(cors({ origin: /^http:\/\/localhost:\d+$/ }));
+const allowedOrigins = [
+  /^http:\/\/localhost:\d+$/,
+  ...(process.env.FRONTEND_URL ? [process.env.FRONTEND_URL] : []),
+];
+app.use(cors({ origin: allowedOrigins }));
 app.use(express.json());
 
 // ── Plaid client ──────────────────────────────────────────────────────────────
